@@ -1,39 +1,44 @@
 /**
  * Audio recorder — captures AudioContext output to WAV.
  *
- * Uses a MediaStreamDestination + MediaRecorder to capture the
- * audio graph output, then encodes to WAV for download.
+ * Taps the source AudioNode with a ScriptProcessor, accumulates raw float32
+ * samples, and encodes a 16-bit PCM WAV on stop. No codec round-trip.
+ *
+ * Why not MediaRecorder + opus?
+ *   The previous implementation used MediaStreamDestination + MediaRecorder
+ *   (audio/webm;codecs=opus), then re-decoded to PCM. Opus is perceptually
+ *   coded — transparent on stationary signals but distorts broadband transient
+ *   content. Measured: HPF passband through opus loses ~63% of peak energy
+ *   vs raw float32 from the same scsynth output. That gap propagated into
+ *   every desktop-vs-web audio comparison and was misread as a mixer / FX-DSP
+ *   parity gap. With a raw float32 tap, our recording_save WAV is the same
+ *   PCM signal scsynth produced — apples-to-apples with desktop's recording_save.
+ *
+ * Why not SuperSonic.startCapture / stopCapture?
+ *   SAB-mode-only. Our deploy serves without COOP/COEP headers (sonicpi.cc,
+ *   the npm-published lib, sandboxed iframes), so SuperSonic boots in
+ *   postMessage mode. ScriptProcessor works in both modes and gives us the
+ *   same final-mix tap point we had before.
+ *
+ * Why ScriptProcessor (deprecated) instead of AudioWorkletNode?
+ *   ScriptProcessor's pull-from-main-thread cost is irrelevant here — we tap
+ *   the master output, which already exists, just to copy frames. No DSP
+ *   work runs on main thread. Switching to a worklet would add a bundled
+ *   processor file and a port-message protocol for chunk delivery; not worth
+ *   it for read-only capture.
  */
 
-// ---------------------------------------------------------------------------
-// WAV format constants (RIFF/PCM, little-endian, 16-bit stereo)
-// ---------------------------------------------------------------------------
-
-/** Default number of output channels (stereo). */
 const DEFAULT_CHANNELS = 2
-/** MediaRecorder chunk interval — 100ms keeps memory bounded during long recordings. */
-const RECORDER_CHUNK_INTERVAL_MS = 100
-/** WAV header size in bytes (standard PCM RIFF header). */
-const WAV_HEADER_SIZE = 44
-/** Size of the fmt subchunk for uncompressed PCM (bytes). */
-const WAV_FMT_CHUNK_SIZE = 16
-/** Audio format code for uncompressed PCM (WAVE_FORMAT_PCM). */
-const WAV_FMT_PCM = 1
-/** Bit depth for the output WAV file. */
-const BITS_PER_SAMPLE = 16
-/** Bytes per sample (BITS_PER_SAMPLE / 8). */
-const BYTES_PER_SAMPLE = 2
-/**
- * Bytes between "RIFF" and the end of the file, excluding the 8-byte RIFF chunk header.
- * Equals WAV_HEADER_SIZE - 8 = 36.
- */
-const WAV_RIFF_DATA_OFFSET = 36
-/** Scale factor for negative float samples → signed 16-bit (−32768). */
-const INT16_NEGATIVE_SCALE = 0x8000
-/** Scale factor for non-negative float samples → signed 16-bit (32767). */
-const INT16_POSITIVE_SCALE = 0x7FFF
+const SCRIPT_PROCESSOR_BUFFER_SIZE = 4096
 
-// ---------------------------------------------------------------------------
+const WAV_HEADER_SIZE = 44
+const WAV_FMT_CHUNK_SIZE = 16
+const WAV_FMT_PCM = 1
+const BITS_PER_SAMPLE = 16
+const BYTES_PER_SAMPLE = 2
+const WAV_RIFF_DATA_OFFSET = 36
+const INT16_NEGATIVE_SCALE = 0x8000
+const INT16_POSITIVE_SCALE = 0x7FFF
 
 export interface RecorderOptions {
   /** Sample rate (default: audioContext.sampleRate) */
@@ -47,11 +52,12 @@ type RecorderState = 'idle' | 'recording' | 'stopped'
 export class Recorder {
   private audioCtx: AudioContext
   private source: AudioNode
-  private mediaRecorder: MediaRecorder | null = null
-  private destination: MediaStreamAudioDestinationNode | null = null
-  private chunks: Blob[] = []
-  private _state: RecorderState = 'idle'
   private channels: number
+  /** Per-channel chunk lists. chunks[ch] is an array of Float32Array buffers. */
+  private chunks: Float32Array[][] = []
+  private processor: ScriptProcessorNode | null = null
+  private silentSink: GainNode | null = null
+  private _state: RecorderState = 'idle'
 
   constructor(audioCtx: AudioContext, source: AudioNode, options?: RecorderOptions) {
     this.audioCtx = audioCtx
@@ -67,50 +73,59 @@ export class Recorder {
   start(): void {
     if (this._state === 'recording') return
 
-    this.destination = this.audioCtx.createMediaStreamDestination()
-    this.source.connect(this.destination)
+    this.chunks = Array.from({ length: this.channels }, () => [])
 
-    this.chunks = []
-    this.mediaRecorder = new MediaRecorder(this.destination.stream, {
-      mimeType: this.getSupportedMimeType(),
-    })
-
-    this.mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) this.chunks.push(e.data)
+    // ScriptProcessor must connect to a destination to actually run, but
+    // we don't want it to play back into the speakers (the source already
+    // routes there). Sink to a 0-gain node, then to destination — graph
+    // runs but no audio is heard.
+    this.processor = this.audioCtx.createScriptProcessor(
+      SCRIPT_PROCESSOR_BUFFER_SIZE,
+      this.channels,
+      this.channels,
+    )
+    const chunks = this.chunks
+    const channels = this.channels
+    this.processor.onaudioprocess = (e) => {
+      const input = e.inputBuffer
+      const numCh = Math.min(input.numberOfChannels, channels)
+      for (let ch = 0; ch < numCh; ch++) {
+        chunks[ch].push(new Float32Array(input.getChannelData(ch)))
+      }
     }
 
-    this.mediaRecorder.start(RECORDER_CHUNK_INTERVAL_MS)
+    this.silentSink = this.audioCtx.createGain()
+    this.silentSink.gain.value = 0
+    this.source.connect(this.processor)
+    this.processor.connect(this.silentSink)
+    this.silentSink.connect(this.audioCtx.destination)
+
     this._state = 'recording'
   }
 
   /** Stop recording and return the audio as a WAV Blob. */
   async stop(): Promise<Blob> {
-    return new Promise((resolve, reject) => {
-      if (!this.mediaRecorder || this._state !== 'recording') {
-        reject(new Error('Not recording'))
-        return
-      }
+    if (this._state !== 'recording' || !this.processor) {
+      throw new Error('Not recording')
+    }
 
-      this.mediaRecorder.onstop = async () => {
-        try {
-          // Disconnect the tap
-          if (this.destination) {
-            try { this.source.disconnect(this.destination) } catch { /* ok */ }
-          }
+    // Pull one final scheduled callback to flush in-flight buffers, then
+    // detach. ScriptProcessor delivers chunks on its own cadence; a single
+    // microtask wait is enough to drain the last queued buffer.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
 
-          const blob = new Blob(this.chunks, { type: this.mediaRecorder!.mimeType })
+    this.processor.onaudioprocess = null
+    try { this.source.disconnect(this.processor) } catch { /* ok */ }
+    try { this.processor.disconnect() } catch { /* ok */ }
+    if (this.silentSink) {
+      try { this.silentSink.disconnect() } catch { /* ok */ }
+    }
+    this.processor = null
+    this.silentSink = null
 
-          // Convert to WAV
-          const wavBlob = await this.blobToWav(blob)
-          this._state = 'stopped'
-          resolve(wavBlob)
-        } catch (err) {
-          reject(err)
-        }
-      }
-
-      this.mediaRecorder.stop()
-    })
+    const wavBlob = this.encodeWav(this.chunks, this.audioCtx.sampleRate)
+    this._state = 'stopped'
+    return wavBlob
   }
 
   /** Stop recording and trigger a browser download. */
@@ -137,41 +152,29 @@ export class Recorder {
 
   /** Cancel recording without saving. */
   cancel(): void {
-    if (this.mediaRecorder && this._state === 'recording') {
-      this.mediaRecorder.stop()
+    if (this.processor) {
+      this.processor.onaudioprocess = null
+      try { this.source.disconnect(this.processor) } catch { /* ok */ }
+      try { this.processor.disconnect() } catch { /* ok */ }
     }
-    if (this.destination) {
-      try { this.source.disconnect(this.destination) } catch { /* ok */ }
+    if (this.silentSink) {
+      try { this.silentSink.disconnect() } catch { /* ok */ }
     }
+    this.processor = null
+    this.silentSink = null
     this.chunks = []
     this._state = 'idle'
   }
 
-  private getSupportedMimeType(): string {
-    const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg']
-    for (const t of types) {
-      if (MediaRecorder.isTypeSupported(t)) return t
-    }
-    return '' // browser default
-  }
-
-  /** Convert a recorded blob (webm/ogg) to WAV format. */
-  private async blobToWav(blob: Blob): Promise<Blob> {
-    const arrayBuffer = await blob.arrayBuffer()
-
-    // Decode the recorded audio
-    const audioBuffer = await this.audioCtx.decodeAudioData(arrayBuffer)
-
-    // Encode as WAV
-    const numChannels = Math.min(audioBuffer.numberOfChannels, this.channels)
-    const sampleRate = audioBuffer.sampleRate
-    const length = audioBuffer.length
+  /** Build a 16-bit PCM WAV from per-channel float32 chunk lists. */
+  private encodeWav(chunks: Float32Array[][], sampleRate: number): Blob {
+    const numChannels = chunks.length
+    const length = chunks[0]?.reduce((acc, c) => acc + c.length, 0) ?? 0
     const blockAlign = numChannels * BYTES_PER_SAMPLE
     const dataSize = length * blockAlign
     const buffer = new ArrayBuffer(WAV_HEADER_SIZE + dataSize)
     const view = new DataView(buffer)
 
-    // WAV header (RIFF/PCM, little-endian)
     this.writeString(view, 0, 'RIFF')
     view.setUint32(4, WAV_RIFF_DATA_OFFSET + dataSize, true)
     this.writeString(view, 8, 'WAVE')
@@ -183,21 +186,26 @@ export class Recorder {
     view.setUint32(28, sampleRate * blockAlign, true)
     view.setUint16(32, blockAlign, true)
     view.setUint16(34, BITS_PER_SAMPLE, true)
-
     this.writeString(view, 36, 'data')
     view.setUint32(40, dataSize, true)
 
-    // Interleave channels and write PCM data
-    const channels: Float32Array[] = []
-    for (let ch = 0; ch < numChannels; ch++) {
-      channels.push(audioBuffer.getChannelData(ch))
-    }
+    // Flatten per-channel chunk lists into contiguous Float32Array arrays.
+    const channels: Float32Array[] = chunks.map((chs) => {
+      const out = new Float32Array(length)
+      let off = 0
+      for (const c of chs) { out.set(c, off); off += c.length }
+      return out
+    })
 
     let offset = WAV_HEADER_SIZE
     for (let i = 0; i < length; i++) {
       for (let ch = 0; ch < numChannels; ch++) {
         const sample = Math.max(-1, Math.min(1, channels[ch][i]))
-        view.setInt16(offset, sample < 0 ? sample * INT16_NEGATIVE_SCALE : sample * INT16_POSITIVE_SCALE, true)
+        view.setInt16(
+          offset,
+          sample < 0 ? sample * INT16_NEGATIVE_SCALE : sample * INT16_POSITIVE_SCALE,
+          true,
+        )
         offset += BYTES_PER_SAMPLE
       }
     }
