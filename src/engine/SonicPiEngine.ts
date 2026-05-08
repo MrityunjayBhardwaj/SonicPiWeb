@@ -108,6 +108,19 @@ export class SonicPiEngine {
   private buildNestingDepth = 0
   /** Names that already received the "nested live_loop" warning so we don't spam. */
   private nestedWarned = new Set<string>()
+  /**
+   * The ProgramBuilder currently executing its synchronous builderFn (SP72).
+   * Set in `asyncFn` around the `builderFn(builder)` call, restored on exit.
+   * When a nested `live_loop` registers from inside another's builderFn,
+   * `wrappedLiveLoop` reads `currentBuildBuilder.currentBpm` /
+   * `currentBuildBuilder.currentDefaultSynth` to inherit the parent's
+   * in-flight bpm/synth — which is what `b.use_bpm(N)` / `b.use_synth(:n)`
+   * inside the parent's body just set. The engine-level `defaultBpm` /
+   * `defaultSynth` are mutated only by *top-level* `use_bpm` / `use_synth`,
+   * so they would yield the wrong value here (commonly 60 / 'beep' for
+   * code wrapped in `in_thread` by capture tools).
+   */
+  private currentBuildBuilder: ProgramBuilder | null = null
   /** Persistent top-level FX state — keyed by scope ID, shared across loops in same with_fx. */
   private persistentFx = new Map<string, { buses: number[]; groups: number[]; outBus: number }>()
   /** Maps loop name → FX scope ID (loops under same with_fx share a scope). */
@@ -642,9 +655,22 @@ export class SonicPiEngine {
           // so an instance-level counter is safe.
           scopeHandle?.enterScope(name)
           this.buildNestingDepth++
+          // SP72: expose this builder to nested wrappedLiveLoop calls that fire
+          // synchronously inside builderFn. They need our `_currentBpm` /
+          // `currentSynth` (mutated by `b.use_bpm` / `b.use_synth` during this
+          // build phase) to inherit the correct values, instead of reading
+          // engine-level defaultBpm / defaultSynth (which are mutated only by
+          // top-level use_bpm / use_synth and would yield 60 / 'beep' for code
+          // wrapped in `in_thread` by capture tools). JS is single-threaded so
+          // builderFn never interleaves with another asyncFn — a single field
+          // is safe; we still push/restore so nested live_loops nested in
+          // ANOTHER live_loop's body still see the correct (innermost) parent.
+          const prevBuildBuilder = this.currentBuildBuilder
+          this.currentBuildBuilder = builder
           try {
             builderFn(builder)
           } finally {
+            this.currentBuildBuilder = prevBuildBuilder
             this.buildNestingDepth--
             scopeHandle?.exitScope()
           }
@@ -676,6 +702,19 @@ export class SonicPiEngine {
           scheduler.fireCue(name, name)
         }
 
+        // SP72: when this registration fires from inside a parent builderFn
+        // (buildNestingDepth > 0), the user's intent is "inherit the in-flight
+        // bpm/synth from my parent thread/loop". The parent's `b.use_bpm(N)` /
+        // `b.use_synth(:n)` mutated the parent ProgramBuilder's local state but
+        // did NOT touch engine-level defaultBpm/defaultSynth (those mutate only
+        // from top-level use_bpm/use_synth). Read from the parent builder if
+        // we have one, else fall back to engine defaults.
+        const parentBuilder = this.currentBuildBuilder
+        const inheritedBpm = (this.buildNestingDepth > 0 && parentBuilder)
+          ? parentBuilder.currentBpm : defaultBpm
+        const inheritedSynth = (this.buildNestingDepth > 0 && parentBuilder)
+          ? parentBuilder.currentDefaultSynth : defaultSynth
+
         if (this.buildNestingDepth > 0 && isReEvaluate) {
           // Nested hot-swap (issue #199): this call is firing from inside an
           // outer live_loop's iteration, AFTER the top-level evaluate()'s
@@ -690,12 +729,13 @@ export class SonicPiEngine {
             // the outer's reEvaluate, so the inner's old loopBus is dead. Bind
             // task.outBus to the freshly-allocated bus, and refresh bpm /
             // currentSynth so a top-level use_bpm/use_synth change propagates.
-            existing.bpm = defaultBpm
-            existing.currentSynth = defaultSynth
+            // SP72: nested hot-swap inherits from parent builder, not defaults.
+            existing.bpm = inheritedBpm
+            existing.currentSynth = inheritedSynth
             existing.outBus = loopBus
           } else {
             // New inner declared during hot-swap (e.g. user added it on Run).
-            scheduler.registerLoop(name, asyncFn, { bpm: defaultBpm, synth: defaultSynth })
+            scheduler.registerLoop(name, asyncFn, { bpm: inheritedBpm, synth: inheritedSynth })
             const task = scheduler.getTask(name)
             if (task) task.outBus = loopBus
           }
@@ -706,8 +746,12 @@ export class SonicPiEngine {
           scheduler.registerLoop(name, asyncFn)
           const task = scheduler.getTask(name)
           if (task) {
-            task.bpm = defaultBpm
-            task.currentSynth = defaultSynth
+            // SP72: nested initial registration inherits parent builder's bpm
+            // and synth (set by `b.use_bpm`/`b.use_synth` inside the parent's
+            // builderFn body). Top-level registrations (depth=0) use the
+            // engine-level defaults — unchanged from prior behavior.
+            task.bpm = inheritedBpm
+            task.currentSynth = inheritedSynth
             task.outBus = loopBus
           }
         }

@@ -150,6 +150,18 @@ export class ProgramBuilder {
     return this
   }
 
+  /** Read-only view of the builder's current bpm. Used by SonicPiEngine when a
+   *  nested `live_loop` registers from inside another's builderFn — the
+   *  nested loop must inherit the *parent's* in-flight bpm (set by `b.use_bpm`
+   *  during this build phase), not the engine-level `defaultBpm` (which is
+   *  only mutated by top-level `use_bpm`). See SP72. */
+  get currentBpm(): number { return this._currentBpm }
+
+  /** Read-only view of the builder's current default synth. Same rationale as
+   *  currentBpm: nested `live_loop` registrations need the parent's in-flight
+   *  synth, not the engine-level `defaultSynth`. */
+  get currentDefaultSynth(): string { return this.currentSynth }
+
   /** Set BPM to match a sample's natural tempo. */
   use_sample_bpm(name: string, opts?: Record<string, unknown>): this {
     const dur = this.sample_duration(name, opts)
