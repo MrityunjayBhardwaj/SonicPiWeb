@@ -92,6 +92,23 @@
         color: var(--text);
         font-weight: 600;
       }
+      .context-note {
+        margin: 0 0 12px;
+        padding: 9px 11px;
+        background: rgba(122, 162, 247, 0.08);
+        border-left: 3px solid var(--accent-2, #7aa2f7);
+        border-radius: 4px;
+        font-size: 11.5px;
+        line-height: 1.45;
+        color: var(--text-dim);
+      }
+      .context-note b { color: var(--text); }
+      .context-note a {
+        color: var(--accent-2, #7aa2f7);
+        text-decoration: none;
+        border-bottom: 1px dotted currentColor;
+      }
+      .context-note a:hover { color: var(--text); }
       .controls {
         display: flex;
         flex-direction: column;
@@ -215,6 +232,52 @@
       .badge.INCONCLUSIVE {
         background: rgba(86, 95, 137, 0.2);
         color: var(--text-dim);
+      }
+      /* Precondition-violated badge in sidebar row + chip filter state.
+         A confound flag, NOT a verdict — orthogonal axis. Yellow signals
+         "score exists but is uninterpretable until the confound is fixed." */
+      .badge.PRECON {
+        background: rgba(224, 175, 104, 0.18);
+        color: var(--flag);
+        border: 1px solid rgba(224, 175, 104, 0.4);
+      }
+      .chip[data-filter="precondition"][data-on="1"] {
+        background: rgba(224, 175, 104, 0.15);
+        border-color: var(--flag);
+        color: var(--flag);
+      }
+      /* Yellow banner shown above the spectrogram on the detail pane when
+         any precondition probe failed. Designed to be impossible to miss
+         while eyeballing index.html. */
+      .precondition-banner {
+        margin: 16px 0;
+        padding: 12px 16px;
+        background: rgba(224, 175, 104, 0.10);
+        border-left: 4px solid var(--flag);
+        border-radius: 4px;
+        color: var(--text);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .precondition-banner .pb-head {
+        font-weight: 700;
+        color: var(--flag);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-size: 11px;
+        margin-bottom: 6px;
+      }
+      .precondition-banner ul {
+        margin: 6px 0 0;
+        padding-left: 20px;
+      }
+      .precondition-banner li {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-dim);
+      }
+      .precondition-banner li b {
+        color: var(--text);
       }
       /* ───────── detail ───────── */
       .detail {
@@ -448,6 +511,18 @@
             <strong>FX A/B Inspector</strong><span id="count"></span>
           </h2>
           <div class="summary" id="summary"></div>
+          <div class="context-note">
+            <b>Sweep state (2026-05-08 · post SP72 + AMP=3, SR-consistent at 48 kHz):</b> mean score
+            <b class="ratio-good">37.9 → 58.4</b> · LOW count <b class="ratio-good">32 → 7</b>
+            · HIGH <b class="ratio-good">0 → 1</b> (<code>wobble</code> 75.0 — clears both score≥70 AND MFCC≤180).
+            SP72 fix (use_bpm leak in nested <code>live_loop</code> under <code>--wrap-recording</code>, merged in #280)
+            + MIXER.AMP 1.2 → 3 (empirical compensation for WASM scsynth output deficit, characterised in
+            <a href="raw-lpf.html">raw-lpf.html</a>).
+            Remaining LOW (7): filter family (<code>bpf</code>, <code>rbpf</code>, <code>hpf</code>, <code>rhpf</code>) + non-linear (<code>tanh</code>) + reverb (<code>gverb</code>) + sustained-modulation (<code>vowel</code>).
+            INCONCLUSIVE: <code>delay</code>, <code>chorus</code> (desktop silent — SP63).
+            <br><br>
+            <b>Companion view:</b> <a href="e2e.html">e2e.html</a> — 10 full compositions, A/B desktop ↔ web with spectrograms.
+          </div>
           <div class="controls">
             <input
               id="search"
@@ -462,6 +537,9 @@
               <button class="chip" data-verdict="LOW" data-on="1" title="score &lt; 50">LOW</button>
               <button class="chip" data-verdict="INCONCLUSIVE" data-on="1" title="desktop side silent or missing">
                 INCONCLUSIVE
+              </button>
+              <button class="chip" data-filter="precondition" data-on="1" title="Hide entries where a precondition probe failed (score is uninterpretable for those)">
+                ⚠ Confound
               </button>
             </div>
             <select id="sort">
@@ -485,6 +563,9 @@
         filtered: [],
         selectedFx: null,
         verdicts: { HIGH: true, MID: true, LOW: true, INCONCLUSIVE: true },
+        // showConfounded: when true (default), violated entries appear in the
+        // list with a ⚠ badge. Toggle off to focus on trustworthy entries.
+        showConfounded: true,
         search: "",
         sort: "score-desc",
       };
@@ -518,27 +599,52 @@
         });
         for (const chip of $("filters").querySelectorAll(".chip")) {
           chip.addEventListener("click", () => {
-            const v = chip.dataset.verdict;
-            state.verdicts[v] = !state.verdicts[v];
-            chip.dataset.on = state.verdicts[v] ? "1" : "0";
+            if (chip.dataset.filter === "precondition") {
+              state.showConfounded = !state.showConfounded;
+              chip.dataset.on = state.showConfounded ? "1" : "0";
+            } else {
+              const v = chip.dataset.verdict;
+              state.verdicts[v] = !state.verdicts[v];
+              chip.dataset.on = state.verdicts[v] ? "1" : "0";
+            }
             render();
           });
         }
         document.addEventListener("keydown", onKey);
 
         render();
-        if (state.filtered.length) select(state.filtered[0].fx);
+        // Deep link via ?fx=NAME (e.g. ?fx=lpf). Falls back to first listed.
+        const initial = new URLSearchParams(location.search).get("fx");
+        if (initial && state.entries.some((x) => x.fx === initial)) {
+          select(initial);
+        } else if (state.filtered.length) {
+          select(state.filtered[0].fx);
+        }
+        window.addEventListener("popstate", (ev) => {
+          const fx = ev.state?.fx;
+          if (fx && state.entries.some((x) => x.fx === fx)) select(fx, { push: false });
+        });
       }
 
       function renderSummary(data) {
         const c = data.counts;
+        const ps = data.preconditionStats;
         const dt = new Date(data.generatedAt);
         const ago = humanAgo(dt);
+        // Precondition health badge: violated count if any, else missing
+        // count if any (means probes haven't run on those), else nothing.
+        let preconditionLine = "";
+        if (ps?.violated > 0) {
+          preconditionLine = `<span title="precondition probes failed — score uninterpretable">· <b class="ratio-mid">⚠ ${ps.violated}</b> confound</span>`;
+        } else if (ps?.missing > 0 && ps.missing < (ps.total ?? 0)) {
+          preconditionLine = `<span title="${ps.missing} entries lack precondition probes — re-run spectrogram-compare to populate">· <b>${ps.missing}</b> unprobed</span>`;
+        }
         return `
           <span><b class="ratio-good">${c.HIGH ?? 0}</b> HIGH</span>
           <span><b class="ratio-mid">${c.MID ?? 0}</b> MID</span>
           <span><b class="ratio-bad">${c.LOW ?? 0}</b> LOW</span>
           <span><b>${c.INCONCLUSIVE ?? 0}</b> incon</span>
+          ${preconditionLine}
           <span title="${dt.toISOString()}">· ${ago}</span>
         `;
       }
@@ -559,6 +665,7 @@
         let list = state.entries.filter((e) => {
           if (!state.verdicts[e.verdict]) return false;
           if (q && !e.fx.toLowerCase().includes(q)) return false;
+          if (!state.showConfounded && e.preconditions?.violated) return false;
           return true;
         });
         list.sort(comparator(state.sort));
@@ -596,7 +703,12 @@
       function renderList() {
         const html = state.filtered
           .map((e) => {
+            const violated = !!e.preconditions?.violated;
+            // Score is shown but visually de-emphasized when uninterpretable.
+            // Don't substitute "—" — the score still exists, the user just
+            // shouldn't trust it. Strikethrough conveys that.
             const score = e.verdict === "INCONCLUSIVE" ? "—" : e.score.toFixed(1);
+            const scoreStyle = violated ? ' style="text-decoration:line-through;color:var(--text-mute)"' : "";
             const mfccCls =
               e.mfccDist == null
                 ? "ratio-bad"
@@ -608,11 +720,14 @@
             const sub = e.verdict === "INCONCLUSIVE"
               ? "no shared signal"
               : `RMS ${fmtRatio(e.rmsRatio)}× · L2 ${e.l2MelDb.toFixed(1)}dB · <span class="${mfccCls}">MFCC ${Math.round(e.mfccDist)}</span>`;
+            const confoundBadge = violated
+              ? ` <span class="badge PRECON" title="precondition probe failed: ${e.preconditions.failed.join(", ")}">⚠ CONFOUND</span>`
+              : "";
             return `
               <div class="row" data-fx="${e.fx}" ${state.selectedFx === e.fx ? 'data-active="1"' : ""}>
                 <div class="row-name">${e.fx}</div>
-                <div class="row-score">${score}</div>
-                <div class="row-sub"><span class="badge ${e.verdict}">${e.verdict}</span> ${sub}</div>
+                <div class="row-score"${scoreStyle}>${score}</div>
+                <div class="row-sub"><span class="badge ${e.verdict}">${e.verdict}</span>${confoundBadge} ${sub}</div>
               </div>
             `;
           })
@@ -629,13 +744,22 @@
         return r.toFixed(2);
       }
 
-      function select(fx) {
+      function select(fx, opts = { push: true }) {
         state.selectedFx = fx;
         for (const row of $("list").querySelectorAll(".row")) {
           row.dataset.active = row.dataset.fx === fx ? "1" : "0";
         }
         const e = state.entries.find((x) => x.fx === fx);
         if (e) renderDetail(e);
+        if (opts.push !== false) {
+          const url = new URL(location.href);
+          url.searchParams.set("fx", fx);
+          history.pushState({ fx }, "", url);
+        }
+        // Scroll the selected row into view (helps when the user clicks a
+        // deep-link to an FX that's far down the sidebar list).
+        const row = $("list").querySelector(`.row[data-fx="${fx}"]`);
+        if (row) row.scrollIntoView({ block: "nearest" });
       }
 
       function renderDetail(e) {
@@ -674,6 +798,7 @@
           </div>
         `;
 
+        const preconditionHtml = renderPreconditionBanner(e);
         const spectroHtml = a.spectrogramPng
           ? `<div class="png-block"><img src="${encodeURI(a.spectrogramPng)}" alt="spectrogram"></div>`
           : '<div class="png-missing">spectrogram.png missing</div>';
@@ -704,6 +829,7 @@
             <div class="score">${score} <small>/ 100</small></div>
           </div>
 
+          ${preconditionHtml}
           ${audioHtml}
           ${syncHtml}
 
@@ -760,6 +886,48 @@
         }
 
         wireSyncButtons();
+      }
+
+      // Yellow banner above the spectrogram on the detail pane. Renders when
+      // a probe in tools/spectrogram-compare.py:verify_preconditions failed —
+      // the FX's score still loaded fine, but at least one of (onset count,
+      // envelope lag, energy×duration) shows the two WAVs aren't comparable
+      // signal-shape parity, so L2/MFCC/per-beat answer a different question.
+      // Returns "" when there's nothing to flag.
+      function renderPreconditionBanner(e) {
+        const p = e.preconditions;
+        if (!p) return ""; // sidecar predates the probes; quiet
+        if (!p.violated) return ""; // all probes passed
+        const probes = p.probes || {};
+        const lines = [];
+        const oc = probes.onset_count;
+        if (oc && !oc.ok && !oc.skipped) {
+          lines.push(
+            `<li><b>Onset-count parity</b>: desktop=${oc.desktop_hits}, web=${oc.web_hits} (ratio ${oc.ratio}× — outside ${oc.tolerance}). One side fires far more events than the other; tempo or scope-leak likely.</li>`,
+          );
+        }
+        const lag = probes.envelope_lag;
+        if (lag && !lag.ok && !lag.skipped) {
+          lines.push(
+            `<li><b>Envelope alignment</b>: best cross-correlation lag = ${lag.best_lag_ms}ms (tolerance ${lag.tolerance_ms}ms). Sides drift relative to each other — leading silence, tempo divergence.</li>`,
+          );
+        }
+        const en = probes.energy_x_duration;
+        if (en && !en.ok && !en.skipped) {
+          lines.push(
+            `<li><b>Total energy × duration</b>: desktop=${en.desktop}, web=${en.web} (ratio ${en.ratio}× — outside ${en.tolerance}). Whole-WAV energy diverges far past loudness-mismatch territory.</li>`,
+          );
+        }
+        return `
+          <div class="precondition-banner">
+            <div class="pb-head">⚠ Score uninterpretable — precondition violated</div>
+            The L2 / MFCC / per-beat numbers below assume both WAVs share signal
+            shape (length, tempo, beat grid, energy distribution). At least one
+            probe says they don't. Fix the upstream confound before treating the
+            score as parity evidence.
+            <ul>${lines.join("")}</ul>
+          </div>
+        `;
       }
 
       function ratioCell(num, denom) {

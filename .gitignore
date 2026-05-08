@@ -22,10 +22,14 @@ artifacts/*
 test-results/
 
 # FX A/B inspector — mirrors .captures/ artifacts (≈80 MB of WAVs per build)
-# Built by `npm run inspect`. The HTML viewer (test_results/index.html) is
-# the only checked-in file; everything else is regenerated on demand.
+# Built by `npm run inspect`. The HTML viewers (test_results/index.html and
+# test_results/e2e.html) are the only checked-in viewer files; everything
+# else is regenerated on demand. raw-lpf/ is per-investigation captures.
 test_results/fx/
 test_results/fx-baseline.json
+test_results/e2e/
+test_results/e2e.html
+test_results/raw-lpf/
 
 # Playwright
 playwright-report/
