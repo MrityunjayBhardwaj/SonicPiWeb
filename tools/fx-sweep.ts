@@ -1,6 +1,6 @@
 /**
  * FX WAV-verify sweep — runs every wired FX through the A/B comparator,
- * categorizes each as PASS / FLAG / FAIL, and writes a baseline JSON for
+ * categorizes each as HIGH / MID / LOW / INCONCLUSIVE, and writes a baseline JSON for
  * regression checks.
  *
  * Why: 40 FX are wired in src/engine/SonicPiEngine.ts:462-470 but only a
@@ -22,7 +22,7 @@
  * Output:
  *   .captures/fx-sweep/snippet-<fx>.rb       — per-FX snippet (re-runnable)
  *   .captures/fx-sweep/<fx>.json             — sidecar metrics
- *   .captures/fx-sweep/SUMMARY.md            — PASS/FLAG/FAIL table
+ *   .captures/fx-sweep/SUMMARY.md            — HIGH/MID/LOW/INCONCLUSIVE table
  *   .captures/fx-baseline.json               — baseline for regression diffs
  */
 
@@ -223,6 +223,68 @@ interface FxComparisonJson {
   reportPath: string
 }
 
+function emptyMetrics(fx: FxSpec, jsonPath: string): FxMetrics {
+  return {
+    fx: fx.name,
+    flavor: fx.flavor,
+    desktop: null,
+    web: null,
+    rmsRatio: null,
+    peakRatio: null,
+    l2MelDb: null,
+    mfccDist: null,
+    silentDesktopBeats: [],
+    silentWebBeats: [],
+    silentBeatAsymmetry: false,
+    meanPerBeatMfcc: null,
+    reportPath: '',
+    jsonPath,
+    errors: [],
+  }
+}
+
+// Hydrate FxMetrics from a per-FX sidecar JSON written by a prior sweep run.
+// Used by both runFx (after the comparator subprocess writes the file) and
+// --reclassify-only (which skips recording entirely).
+function metricsFromSidecar(fx: FxSpec, jsonPath: string): FxMetrics {
+  const m = emptyMetrics(fx, jsonPath)
+  if (!existsSync(jsonPath)) {
+    m.errors.push('sidecar JSON not found')
+    return m
+  }
+  try {
+    const j = JSON.parse(readFileSync(jsonPath, 'utf8')) as FxComparisonJson
+    m.reportPath = j.reportPath
+    m.desktop = j.desktop.stats ? {
+      rms: j.desktop.stats.rms, peak: j.desktop.stats.peak, duration: j.desktop.stats.duration,
+    } : null
+    m.web = j.web.stats ? {
+      rms: j.web.stats.rms, peak: j.web.stats.peak, duration: j.web.stats.duration,
+    } : null
+    if (m.desktop && m.web) {
+      m.rmsRatio = m.desktop.rms > 0 ? m.web.rms / m.desktop.rms : null
+      m.peakRatio = m.desktop.peak > 0 ? m.web.peak / m.desktop.peak : null
+    }
+    if (j.spectrogram) {
+      m.l2MelDb = j.spectrogram.l2_mel_db
+      m.mfccDist = j.spectrogram.mfcc_distance
+      if (j.spectrogram.per_beat) {
+        m.meanPerBeatMfcc = j.spectrogram.per_beat.mean_per_beat_mfcc_distance
+        m.silentDesktopBeats = j.spectrogram.per_beat.rows
+          .filter((r) => r.desktop_rms < 0.001).map((r) => r.beat)
+        m.silentWebBeats = j.spectrogram.per_beat.rows
+          .filter((r) => r.web_rms < 0.001).map((r) => r.beat)
+        const dPost = m.silentDesktopBeats.filter((b) => b >= WARMUP_BEATS)
+        const wPost = m.silentWebBeats.filter((b) => b >= WARMUP_BEATS)
+        m.silentBeatAsymmetry = dPost.length !== wPost.length
+      }
+    }
+  } catch (err) {
+    m.errors.push(`failed to parse JSON: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  return m
+}
+
 async function runFx(fx: FxSpec): Promise<FxMetrics> {
   const snippetPath = resolve(SWEEP_DIR, `snippet-${fx.name}.rb`)
   writeFileSync(snippetPath, renderSnippet(fx))
@@ -248,74 +310,58 @@ async function runFx(fx: FxSpec): Promise<FxMetrics> {
     child.stdout.on('data', (b) => { stdout += b.toString() })
     child.stderr.on('data', (b) => { stderr += b.toString() })
     child.on('close', () => {
-      const m: FxMetrics = {
-        fx: fx.name,
-        flavor: fx.flavor,
-        desktop: null,
-        web: null,
-        rmsRatio: null,
-        peakRatio: null,
-        l2MelDb: null,
-        mfccDist: null,
-        silentDesktopBeats: [],
-        silentWebBeats: [],
-        silentBeatAsymmetry: false,
-        meanPerBeatMfcc: null,
-        reportPath: '',
-        jsonPath,
-        errors: [],
-      }
       if (!existsSync(jsonPath)) {
+        const m = emptyMetrics(fx, jsonPath)
         m.errors.push('comparator did not write JSON sidecar')
         m.errors.push(`stdout: ${stdout.trim().slice(-300)}`)
         if (stderr.trim()) m.errors.push(`stderr: ${stderr.trim().slice(-300)}`)
         resolveP(m)
         return
       }
-      try {
-        const j = JSON.parse(readFileSync(jsonPath, 'utf8')) as FxComparisonJson
-        m.reportPath = j.reportPath
-        m.desktop = j.desktop.stats ? {
-          rms: j.desktop.stats.rms, peak: j.desktop.stats.peak, duration: j.desktop.stats.duration,
-        } : null
-        m.web = j.web.stats ? {
-          rms: j.web.stats.rms, peak: j.web.stats.peak, duration: j.web.stats.duration,
-        } : null
-        if (m.desktop && m.web) {
-          m.rmsRatio = m.desktop.rms > 0 ? m.web.rms / m.desktop.rms : null
-          m.peakRatio = m.desktop.peak > 0 ? m.web.peak / m.desktop.peak : null
-        }
-        if (j.spectrogram) {
-          m.l2MelDb = j.spectrogram.l2_mel_db
-          m.mfccDist = j.spectrogram.mfcc_distance
-          if (j.spectrogram.per_beat) {
-            m.meanPerBeatMfcc = j.spectrogram.per_beat.mean_per_beat_mfcc_distance
-            m.silentDesktopBeats = j.spectrogram.per_beat.rows
-              .filter((r) => r.desktop_rms < 0.001).map((r) => r.beat)
-            m.silentWebBeats = j.spectrogram.per_beat.rows
-              .filter((r) => r.web_rms < 0.001).map((r) => r.beat)
-            // Asymmetry check excludes WARMUP_BEATS leading beats — desktop's
-            // scsynth needs ~2 beats to settle before audio fires (SP22). Web
-            // doesn't have this delay, so beats 0..WARMUP_BEATS-1 will always
-            // look asymmetric without indicating an FX bug.
-            const dPost = m.silentDesktopBeats.filter((b) => b >= WARMUP_BEATS)
-            const wPost = m.silentWebBeats.filter((b) => b >= WARMUP_BEATS)
-            m.silentBeatAsymmetry = dPost.length !== wPost.length
-          }
-        }
-      } catch (err) {
-        m.errors.push(`failed to parse JSON: ${err instanceof Error ? err.message : String(err)}`)
-      }
-      resolveP(m)
+      // Hydrate from the freshly-written sidecar. Asymmetry check excludes
+      // WARMUP_BEATS leading beats — desktop's scsynth needs ~2 beats to
+      // settle before audio fires (SP22). Web doesn't have this delay, so
+      // beats 0..WARMUP_BEATS-1 always look asymmetric without indicating
+      // a real bug.
+      resolveP(metricsFromSidecar(fx, jsonPath))
     })
   })
 }
 
 // ---------------------------------------------------------------------------
-// PASS / FLAG / FAIL classification
+// Score-band classification (HIGH / MID / LOW / INCONCLUSIVE)
 // ---------------------------------------------------------------------------
+//
+// Original PASS/FLAG/FAIL scheme was retired in #278 — PASS only required
+// L2 ≤ 25 dB (≈17× per-band divergence) and ignored MFCC entirely, so 9 of
+// 9 PASS verdicts had spectrograms that visibly didn't match desktop. The
+// new tiers are pure score-band labels with a single hard MFCC gate on the
+// top tier.
+//
+//   HIGH         score ≥ 70 AND MFCC dist ≤ 180   (close in level AND timbre)
+//   MID          50 ≤ score < 70, OR HIGH-score-but-MFCC > 180
+//   LOW          score < 50  (significantly different)
+//   INCONCLUSIVE desktop side missing or silent — can't compare
+//
+// FAIL-style breakage (web-side missing, silent-beat asymmetry past warm-up)
+// produces score < 50 → LOW with a reason explaining why. We don't reuse
+// FAIL as a separate label because the score band already places these at
+// the bottom and the reason text disambiguates.
 
-type Verdict = 'PASS' | 'FLAG' | 'FAIL' | 'INCONCLUSIVE'
+type Verdict = 'HIGH' | 'MID' | 'LOW' | 'INCONCLUSIVE'
+
+const HIGH_SCORE_THRESHOLD = 70
+const HIGH_MFCC_THRESHOLD = 180
+const MID_SCORE_THRESHOLD = 50
+
+function verdictTag(v: Verdict): string {
+  switch (v) {
+    case 'HIGH': return '✓'
+    case 'MID': return '~'
+    case 'LOW': return '✗'
+    case 'INCONCLUSIVE': return '?'
+  }
+}
 
 // Composite consistency score 0-100 against Desktop SP. 100 = identical, 0 =
 // unrelated. Weighted average of four parity components:
@@ -347,7 +393,7 @@ function consistencyScore(m: FxMetrics): number | null {
   )
 }
 
-function classify(m: FxMetrics): { verdict: Verdict; reasons: string[] } {
+function classify(m: FxMetrics, score: number | null): { verdict: Verdict; reasons: string[] } {
   const reasons: string[] = []
   // INCONCLUSIVE: desktop side is broken (silent or empty), so we can't
   // compare. Likely a Desktop SP bug for that FX, not a web issue.
@@ -359,38 +405,48 @@ function classify(m: FxMetrics): { verdict: Verdict; reasons: string[] } {
     reasons.push(`desktop produced silence (peak=${m.desktop.peak}, rms=${m.desktop.rms}) — Desktop SP issue, web cannot be evaluated`)
     return { verdict: 'INCONCLUSIVE', reasons }
   }
-  // FAIL: empty WAV on web side, OR silent-beat asymmetry past warm-up
+  // Web missing → score is null → tier by score logic below would fail. Route
+  // to LOW with explicit reason. Past sweep runs have never hit this; included
+  // for completeness.
   if (!m.web) {
     reasons.push('web produced no WAV')
-    return { verdict: 'FAIL', reasons }
+    return { verdict: 'LOW', reasons }
   }
+  // Silent-beat asymmetry past warm-up is a real signal-path break, not just
+  // a level/shape divergence. Surface it via reason text; tier still falls out
+  // of the score band (will land in MID or LOW depending on numbers).
   if (m.silentBeatAsymmetry) {
     const dPost = m.silentDesktopBeats.filter((b) => b >= WARMUP_BEATS)
     const wPost = m.silentWebBeats.filter((b) => b >= WARMUP_BEATS)
     reasons.push(
       `silent-beat asymmetry past warm-up: desktop silent on [${dPost.join(',') || '–'}] · web silent on [${wPost.join(',') || '–'}]`,
     )
-    return { verdict: 'FAIL', reasons }
-  }
-  if (m.mfccDist !== null && m.mfccDist > 200 && m.rmsRatio !== null && (m.rmsRatio < 0.3 || m.rmsRatio > 3.0)) {
-    reasons.push(`mfcc=${m.mfccDist.toFixed(0)} paired with rmsRatio=${m.rmsRatio.toFixed(2)}× — likely silent or wrong-FX path`)
-    return { verdict: 'FAIL', reasons }
   }
 
-  // FLAG: one threshold breached but not catastrophic
-  if (m.rmsRatio !== null && (m.rmsRatio < 0.5 || m.rmsRatio > 2.0)) {
-    reasons.push(`rms ratio ${m.rmsRatio.toFixed(2)}× outside [0.5, 2.0]`)
+  if (score === null) {
+    reasons.push('score not computable')
+    return { verdict: 'LOW', reasons }
   }
-  if (m.peakRatio !== null && (m.peakRatio < 0.5 || m.peakRatio > 2.0)) {
-    reasons.push(`peak ratio ${m.peakRatio.toFixed(2)}× outside [0.5, 2.0]`)
-  }
-  if (m.l2MelDb !== null && m.l2MelDb > 25) {
-    reasons.push(`spectral L2 ${m.l2MelDb.toFixed(2)}dB > 25 (divergent shape)`)
-  }
-  if (reasons.length > 0) return { verdict: 'FLAG', reasons }
 
-  reasons.push(`rms=${m.rmsRatio?.toFixed(2)}× peak=${m.peakRatio?.toFixed(2)}× L2=${m.l2MelDb?.toFixed(1)}dB MFCC=${m.mfccDist?.toFixed(0)}`)
-  return { verdict: 'PASS', reasons }
+  // Tier by score, gated by MFCC for the top band
+  if (score >= HIGH_SCORE_THRESHOLD && m.mfccDist !== null && m.mfccDist <= HIGH_MFCC_THRESHOLD) {
+    reasons.push(
+      `score ${score.toFixed(1)} · MFCC ${m.mfccDist.toFixed(0)} (≥${HIGH_SCORE_THRESHOLD} AND ≤${HIGH_MFCC_THRESHOLD})`,
+    )
+    return { verdict: 'HIGH', reasons }
+  }
+  if (score >= HIGH_SCORE_THRESHOLD && m.mfccDist !== null && m.mfccDist > HIGH_MFCC_THRESHOLD) {
+    reasons.push(
+      `score ${score.toFixed(1)} would qualify for HIGH but MFCC ${m.mfccDist.toFixed(0)} > ${HIGH_MFCC_THRESHOLD} (timbre diverges)`,
+    )
+    return { verdict: 'MID', reasons }
+  }
+  if (score >= MID_SCORE_THRESHOLD) {
+    reasons.push(`score ${score.toFixed(1)} (audible divergence — recognisable but not parity)`)
+    return { verdict: 'MID', reasons }
+  }
+  reasons.push(`score ${score.toFixed(1)} (significantly different)`)
+  return { verdict: 'LOW', reasons }
 }
 
 // ---------------------------------------------------------------------------
@@ -407,7 +463,7 @@ interface SweepRow {
 }
 
 function writeSummary(rows: SweepRow[], summaryPath: string): void {
-  const counts = { PASS: 0, FLAG: 0, FAIL: 0, INCONCLUSIVE: 0 }
+  const counts: Record<Verdict, number> = { HIGH: 0, MID: 0, LOW: 0, INCONCLUSIVE: 0 }
   for (const r of rows) counts[r.verdict]++
 
   const lines: string[] = []
@@ -415,7 +471,7 @@ function writeSummary(rows: SweepRow[], summaryPath: string): void {
   lines.push('')
   lines.push(`- **Timestamp:** ${new Date().toISOString()}`)
   lines.push(`- **Total FX:** ${rows.length}`)
-  lines.push(`- **PASS:** ${counts.PASS} · **FLAG:** ${counts.FLAG} · **FAIL:** ${counts.FAIL} · **INCONCLUSIVE:** ${counts.INCONCLUSIVE}`)
+  lines.push(`- **HIGH:** ${counts.HIGH} · **MID:** ${counts.MID} · **LOW:** ${counts.LOW} · **INCONCLUSIVE:** ${counts.INCONCLUSIVE}`)
   const evaluated = rows.filter((r) => r.score !== null)
   if (evaluated.length > 0) {
     const mean = evaluated.reduce((s, r) => s + (r.score ?? 0), 0) / evaluated.length
@@ -452,10 +508,10 @@ function writeSummary(rows: SweepRow[], summaryPath: string): void {
   lines.push('Rhythmic snippet: `:bd_haus + :sn_dub` at 120 bpm, 8 beats.')
   lines.push('Sustained snippet: `:prophet` pad with sustained notes (slicer / tremolo / vowel / wobble / panslicer / ring_mod need this to have signal to modulate).')
   lines.push('')
-  lines.push('Categorization rules (see issue #271):')
-  lines.push('- **PASS:** RMS ratio ∈ [0.5, 2.0] · spectral L2 ≤ 25 dB · no silent-beat asymmetry past warm-up')
-  lines.push('- **FLAG:** any single threshold breached (eyeball needed)')
-  lines.push('- **FAIL:** web produced no WAV, web-side silent-beat asymmetry past warm-up, OR MFCC > 200 + RMS ratio outside [0.3, 3.0]')
+  lines.push('Categorization rules (see issues #271, #278):')
+  lines.push(`- **HIGH:** score ≥ ${HIGH_SCORE_THRESHOLD} AND MFCC dist ≤ ${HIGH_MFCC_THRESHOLD} (close in level AND timbre)`)
+  lines.push(`- **MID:** ${MID_SCORE_THRESHOLD} ≤ score < ${HIGH_SCORE_THRESHOLD}, OR HIGH-by-score-only-but-MFCC > ${HIGH_MFCC_THRESHOLD} (audible divergence)`)
+  lines.push(`- **LOW:** score < ${MID_SCORE_THRESHOLD} (significantly different) — also covers web-missing and silent-beat asymmetry`)
   lines.push('- **INCONCLUSIVE:** desktop produced silence or no WAV — Desktop SP issue, web cannot be evaluated against it')
   lines.push('')
   lines.push('Consistency score (0-100):')
@@ -479,25 +535,92 @@ interface SweepArgs {
   only: string[] | null
   skip: string[]
   baseline: string | null
+  reclassifyOnly: boolean
 }
 
 function parseArgs(argv: string[]): SweepArgs {
   let only: string[] | null = null
   let skip: string[] = []
   let baseline: string | null = null
+  let reclassifyOnly = false
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--only') only = argv[++i].split(',').map(s => s.trim())
     else if (a === '--skip') skip = argv[++i].split(',').map(s => s.trim())
     else if (a === '--baseline') baseline = argv[++i]
+    else if (a === '--reclassify-only') reclassifyOnly = true
   }
-  return { only, skip, baseline }
+  return { only, skip, baseline, reclassifyOnly }
+}
+
+async function reclassifyOnly(args: SweepArgs): Promise<void> {
+  let fxToRun = FX_LIST
+  if (args.only) fxToRun = fxToRun.filter(f => args.only!.includes(f.name))
+  if (args.skip.length) fxToRun = fxToRun.filter(f => !args.skip.includes(f.name))
+  const isFullRun = fxToRun.length === FX_LIST.length
+
+  console.log(`▶ Reclassifying ${fxToRun.length} FX from existing sidecars (no recording)`)
+  const rows: SweepRow[] = []
+  let missing = 0
+  for (const fx of fxToRun) {
+    const jsonPath = resolve(SWEEP_DIR, `${fx.name}.json`)
+    if (!existsSync(jsonPath)) {
+      console.log(`  ? ${fx.name}: sidecar missing — skipped`)
+      missing++
+      continue
+    }
+    const m = metricsFromSidecar(fx, jsonPath)
+    const score = consistencyScore(m)
+    const cls = classify(m, score)
+    rows.push({ fx: fx.name, flavor: fx.flavor, verdict: cls.verdict, reasons: cls.reasons, score, m })
+    const tag = verdictTag(cls.verdict)
+    const scoreStr = score === null ? '' : ` (score ${score.toFixed(1)})`
+    const mfccStr = m.mfccDist === null ? '' : ` MFCC=${m.mfccDist.toFixed(0)}`
+    console.log(`  ${tag} ${fx.name.padEnd(12)} ${cls.verdict.padEnd(12)}${scoreStr}${mfccStr}`)
+  }
+
+  const summaryPath = resolve(SWEEP_DIR, 'SUMMARY.md')
+  writeSummary(rows, summaryPath)
+
+  const baseline: Record<string, BaselineEntry> = {}
+  for (const r of rows) {
+    baseline[r.fx] = {
+      verdict: r.verdict,
+      score: r.score,
+      rmsRatio: r.m.rmsRatio,
+      peakRatio: r.m.peakRatio,
+      l2MelDb: r.m.l2MelDb,
+      mfccDist: r.m.mfccDist,
+    }
+  }
+
+  const counts: Record<Verdict, number> = { HIGH: 0, MID: 0, LOW: 0, INCONCLUSIVE: 0 }
+  for (const r of rows) counts[r.verdict]++
+
+  console.log(`\n✓ Summary: ${summaryPath}`)
+  if (isFullRun) {
+    writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2))
+    console.log(`✓ Baseline: ${BASELINE_PATH}`)
+  } else {
+    console.log(`  (partial reclassify — baseline.json unchanged)`)
+  }
+  console.log(`  HIGH ${counts.HIGH} · MID ${counts.MID} · LOW ${counts.LOW} · INCONCLUSIVE ${counts.INCONCLUSIVE} (of ${rows.length})`)
+  if (missing > 0) console.log(`  ${missing} sidecar(s) missing — re-run \`npm run fx-sweep\` to regenerate`)
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
 
   mkdirSync(SWEEP_DIR, { recursive: true })
+
+  // --reclassify-only: skip recording entirely. Re-read each per-FX sidecar
+  // produced by a prior sweep, re-run classify() + consistencyScore(), and
+  // emit a fresh baseline.json + SUMMARY.md. Lets us iterate on tier
+  // thresholds (#278) without burning a 30-minute sweep cycle.
+  if (args.reclassifyOnly) {
+    await reclassifyOnly(args)
+    return
+  }
 
   // Preconditions
   console.log('[precondition] checking dev server on :5173...')
@@ -539,13 +662,13 @@ async function main(): Promise<void> {
     const fx = fxToRun[i]
     process.stdout.write(`[${i + 1}/${fxToRun.length}] :${fx.name} (${fx.flavor})... `)
     const m = await runFx(fx)
-    const cls = classify(m)
     const score = consistencyScore(m)
+    const cls = classify(m, score)
     rows.push({ fx: fx.name, flavor: fx.flavor, verdict: cls.verdict, reasons: cls.reasons, score, m })
-    const tag = cls.verdict === 'PASS' ? '✓' : cls.verdict === 'FLAG' ? '⚠' : '✗'
+    const tag = verdictTag(cls.verdict)
     const scoreStr = score === null ? '' : ` (score ${score.toFixed(1)})`
     console.log(`${tag} ${cls.verdict}${scoreStr}`)
-    if (cls.verdict !== 'PASS') {
+    if (cls.verdict !== 'HIGH') {
       for (const reason of cls.reasons) console.log(`     ${reason}`)
     }
   }
@@ -570,7 +693,7 @@ async function main(): Promise<void> {
   // would either overwrite the canonical baseline with an incomplete snapshot
   // (silently breaking future regression diffs) or shrink it to just the
   // subset. Either way is a footgun.
-  const counts = { PASS: 0, FLAG: 0, FAIL: 0, INCONCLUSIVE: 0 }
+  const counts: Record<Verdict, number> = { HIGH: 0, MID: 0, LOW: 0, INCONCLUSIVE: 0 }
   for (const r of rows) counts[r.verdict]++
 
   console.log(`\n✓ Summary: ${summaryPath}`)
@@ -580,7 +703,7 @@ async function main(): Promise<void> {
   } else {
     console.log(`  (partial run — baseline.json unchanged)`)
   }
-  console.log(`  PASS ${counts.PASS} · FLAG ${counts.FLAG} · FAIL ${counts.FAIL} · INCONCLUSIVE ${counts.INCONCLUSIVE} (of ${rows.length})`)
+  console.log(`  HIGH ${counts.HIGH} · MID ${counts.MID} · LOW ${counts.LOW} · INCONCLUSIVE ${counts.INCONCLUSIVE} (of ${rows.length})`)
 
   // Diff against prior baseline if requested. priorBaseline was read into
   // memory BEFORE the new baseline was written, so even when --baseline points
@@ -591,13 +714,16 @@ async function main(): Promise<void> {
     let improved = 0
     let scoreDelta = 0
     let scoreCompared = 0
+    const tierRank: Record<string, number> = { HIGH: 3, MID: 2, LOW: 1, INCONCLUSIVE: 0, PASS: 3, FLAG: 2, FAIL: 1 }
     for (const r of rows) {
       const p = priorBaseline[r.fx]
       if (!p) continue
-      if (p.verdict === 'PASS' && r.verdict !== 'PASS') {
+      const pr = tierRank[p.verdict] ?? 0
+      const rr = tierRank[r.verdict] ?? 0
+      if (rr < pr) {
         console.log(`  ✗ regression: ${r.fx} ${p.verdict} → ${r.verdict}`)
         regressed++
-      } else if (p.verdict !== 'PASS' && r.verdict === 'PASS') {
+      } else if (rr > pr) {
         console.log(`  ✓ improvement: ${r.fx} ${p.verdict} → ${r.verdict}`)
         improved++
       }

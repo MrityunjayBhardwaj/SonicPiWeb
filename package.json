@@ -38,6 +38,8 @@
     "build:docs": "vitepress build docs",
     "dev:docs": "vitepress dev docs",
     "build:all": "npm run build:single && npm run build:docs",
+    "inspect:build": "npx tsx tools/build-test-results.ts",
+    "inspect": "npx tsx tools/build-test-results.ts && python3 -m http.server -d test_results 8080",
     "postinstall": "cp node_modules/web-tree-sitter/web-tree-sitter.wasm public/tree-sitter.wasm 2>/dev/null; cp node_modules/tree-sitter-wasms/out/tree-sitter-ruby.wasm public/tree-sitter-ruby.wasm 2>/dev/null; true"
   },
   "engines": {

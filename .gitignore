@@ -18,8 +18,14 @@ artifacts/*
 # Planning artifacts (internal)
 .planning/
 
-# Test results
+# Playwright test results
 test-results/
+
+# FX A/B inspector — mirrors .captures/ artifacts (≈80 MB of WAVs per build)
+# Built by `npm run inspect`. The HTML viewer (test_results/index.html) is
+# the only checked-in file; everything else is regenerated on demand.
+test_results/fx/
+test_results/fx-baseline.json
 
 # Playwright
 playwright-report/

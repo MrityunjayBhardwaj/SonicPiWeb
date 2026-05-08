@@ -1,0 +1,867 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>SonicPi.js — FX A/B Inspector</title>
+    <style>
+      :root {
+        --bg: #1a1b26;
+        --bg-elev: #1f2335;
+        --bg-row: #16161e;
+        --bg-row-hover: #232540;
+        --bg-row-active: #2a2f4a;
+        --border: #2a2e46;
+        --text: #c0caf5;
+        --text-dim: #7a85b3;
+        --text-mute: #565f89;
+        --accent: #ff1493;
+        --accent-2: #7aa2f7;
+        --pass: #9ece6a;
+        --flag: #e0af68;
+        --fail: #f7768e;
+        --incon: #565f89;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "Liberation Mono", monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+          sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 13px;
+        overflow: hidden;
+      }
+      .app {
+        display: grid;
+        grid-template-columns: 380px 1fr;
+        height: 100vh;
+      }
+      /* ───────── sidebar ───────── */
+      .sidebar {
+        background: var(--bg-elev);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .sidebar-head {
+        padding: 14px 16px 10px;
+        border-bottom: 1px solid var(--border);
+      }
+      .sidebar-title {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-dim);
+        margin: 0 0 8px;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        justify-content: space-between;
+      }
+      .sidebar-title strong {
+        color: var(--text);
+        letter-spacing: 0;
+        text-transform: none;
+        font-size: 14px;
+      }
+      .summary {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        font-size: 11px;
+        color: var(--text-dim);
+        margin-bottom: 10px;
+      }
+      .summary span {
+        display: inline-flex;
+        gap: 4px;
+        align-items: center;
+      }
+      .summary b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .controls {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .controls input[type="search"],
+      .controls select {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 6px 10px;
+        border-radius: 6px;
+        font: inherit;
+        outline: none;
+      }
+      .controls input[type="search"]:focus,
+      .controls select:focus {
+        border-color: var(--accent-2);
+      }
+      .filters {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .chip {
+        cursor: pointer;
+        user-select: none;
+        font-size: 11px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        color: var(--text-dim);
+        background: transparent;
+        font-weight: 600;
+      }
+      .chip[data-on="1"] {
+        color: var(--text);
+      }
+      .chip[data-verdict="HIGH"][data-on="1"] {
+        background: rgba(158, 206, 106, 0.15);
+        border-color: var(--pass);
+        color: var(--pass);
+      }
+      .chip[data-verdict="MID"][data-on="1"] {
+        background: rgba(224, 175, 104, 0.15);
+        border-color: var(--flag);
+        color: var(--flag);
+      }
+      .chip[data-verdict="LOW"][data-on="1"] {
+        background: rgba(247, 118, 142, 0.15);
+        border-color: var(--fail);
+        color: var(--fail);
+      }
+      .chip[data-verdict="INCONCLUSIVE"][data-on="1"] {
+        background: rgba(86, 95, 137, 0.2);
+        border-color: var(--incon);
+        color: var(--text-dim);
+      }
+      .list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 6px 0;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 4px 12px;
+        padding: 9px 16px;
+        cursor: pointer;
+        border-left: 3px solid transparent;
+        align-items: center;
+      }
+      .row:hover {
+        background: var(--bg-row-hover);
+      }
+      .row[data-active="1"] {
+        background: var(--bg-row-active);
+        border-left-color: var(--accent);
+      }
+      .row-name {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: var(--text);
+      }
+      .row-score {
+        font-family: var(--mono);
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--text);
+        text-align: right;
+        line-height: 1;
+      }
+      .row-sub {
+        grid-column: 1 / 2;
+        font-size: 11px;
+        color: var(--text-mute);
+        font-family: var(--mono);
+      }
+      .badge {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 2px 6px;
+        border-radius: 3px;
+        line-height: 1;
+        display: inline-block;
+      }
+      .badge.HIGH {
+        background: rgba(158, 206, 106, 0.15);
+        color: var(--pass);
+      }
+      .badge.MID {
+        background: rgba(224, 175, 104, 0.15);
+        color: var(--flag);
+      }
+      .badge.LOW {
+        background: rgba(247, 118, 142, 0.15);
+        color: var(--fail);
+      }
+      .badge.INCONCLUSIVE {
+        background: rgba(86, 95, 137, 0.2);
+        color: var(--text-dim);
+      }
+      /* ───────── detail ───────── */
+      .detail {
+        overflow-y: auto;
+        padding: 24px 32px 64px;
+      }
+      .detail-empty {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        color: var(--text-mute);
+        font-size: 14px;
+      }
+      .detail-head {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 8px;
+      }
+      .detail-head h1 {
+        margin: 0;
+        font-family: var(--mono);
+        font-size: 22px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .detail-head .score {
+        margin-left: auto;
+        font-family: var(--mono);
+        font-size: 28px;
+        font-weight: 600;
+      }
+      .detail-head .score small {
+        color: var(--text-mute);
+        font-size: 14px;
+        font-weight: 400;
+      }
+      .meta {
+        color: var(--text-dim);
+        font-size: 12px;
+        margin-bottom: 18px;
+      }
+      .meta code {
+        font-family: var(--mono);
+        color: var(--text);
+      }
+      .audio-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-bottom: 14px;
+      }
+      .audio-card {
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px 14px;
+      }
+      .audio-card h3 {
+        margin: 0 0 8px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-dim);
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+      }
+      .audio-card h3 span {
+        font-family: var(--mono);
+        text-transform: none;
+        letter-spacing: 0;
+        color: var(--text-mute);
+        font-size: 11px;
+        font-weight: 400;
+      }
+      .audio-card audio {
+        width: 100%;
+        height: 32px;
+      }
+      .sync-bar {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 24px;
+      }
+      .sync-btn {
+        background: var(--accent);
+        color: #fff;
+        border: 0;
+        padding: 8px 14px;
+        border-radius: 6px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .sync-btn.sec {
+        background: transparent;
+        color: var(--text-dim);
+        border: 1px solid var(--border);
+      }
+      .sync-btn:hover {
+        filter: brightness(1.1);
+      }
+      .section-h {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-dim);
+        margin: 24px 0 8px;
+      }
+      .png-block {
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px;
+        margin-bottom: 8px;
+      }
+      .png-block img {
+        max-width: 100%;
+        display: block;
+        border-radius: 4px;
+      }
+      .png-missing {
+        color: var(--text-mute);
+        font-style: italic;
+        padding: 16px;
+      }
+      pre.snippet {
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 14px 18px;
+        overflow-x: auto;
+        font-family: var(--mono);
+        font-size: 12.5px;
+        line-height: 1.55;
+        color: var(--text);
+        margin: 0 0 8px;
+        white-space: pre;
+      }
+      table.metrics {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+      table.metrics th,
+      table.metrics td {
+        padding: 6px 10px;
+        text-align: right;
+        border-bottom: 1px solid var(--border);
+      }
+      table.metrics th:first-child,
+      table.metrics td:first-child {
+        text-align: left;
+        color: var(--text-dim);
+      }
+      table.metrics thead th {
+        color: var(--text-dim);
+        font-weight: 600;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      table.metrics tbody tr:hover {
+        background: var(--bg-row-hover);
+      }
+      table.perbeat {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: var(--mono);
+        font-size: 11.5px;
+      }
+      table.perbeat th,
+      table.perbeat td {
+        padding: 4px 8px;
+        text-align: right;
+        border-bottom: 1px solid var(--border);
+      }
+      table.perbeat th:first-child,
+      table.perbeat td:first-child {
+        text-align: left;
+        color: var(--text-dim);
+      }
+      table.perbeat thead th {
+        color: var(--text-dim);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-size: 10px;
+      }
+      table.perbeat tr.divergent td {
+        background: rgba(247, 118, 142, 0.08);
+      }
+      .links {
+        margin-top: 24px;
+        font-size: 12px;
+      }
+      .links a {
+        color: var(--accent-2);
+        text-decoration: none;
+        margin-right: 16px;
+      }
+      .links a:hover {
+        text-decoration: underline;
+      }
+      .footer-meta {
+        margin-top: 32px;
+        padding-top: 16px;
+        border-top: 1px solid var(--border);
+        font-size: 11px;
+        color: var(--text-mute);
+      }
+      .ratio-good {
+        color: var(--pass);
+      }
+      .ratio-mid {
+        color: var(--flag);
+      }
+      .ratio-bad {
+        color: var(--fail);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <h2 class="sidebar-title">
+            <strong>FX A/B Inspector</strong><span id="count"></span>
+          </h2>
+          <div class="summary" id="summary"></div>
+          <div class="controls">
+            <input
+              id="search"
+              type="search"
+              placeholder="search fx (e.g. verb, lpf, delay)"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <div class="filters" id="filters">
+              <button class="chip" data-verdict="HIGH" data-on="1" title="score ≥ 70 AND MFCC ≤ 180">HIGH</button>
+              <button class="chip" data-verdict="MID" data-on="1" title="50 ≤ score &lt; 70, or HIGH-by-score-only-but-MFCC-too-high">MID</button>
+              <button class="chip" data-verdict="LOW" data-on="1" title="score &lt; 50">LOW</button>
+              <button class="chip" data-verdict="INCONCLUSIVE" data-on="1" title="desktop side silent or missing">
+                INCONCLUSIVE
+              </button>
+            </div>
+            <select id="sort">
+              <option value="score-desc">Sort: score (high → low)</option>
+              <option value="score-asc">Sort: score (low → high)</option>
+              <option value="name">Sort: name (a → z)</option>
+              <option value="verdict">Sort: verdict</option>
+            </select>
+          </div>
+        </div>
+        <div class="list" id="list"></div>
+      </aside>
+      <main class="detail" id="detail">
+        <div class="detail-empty">Select an FX from the sidebar.</div>
+      </main>
+    </div>
+
+    <script>
+      const state = {
+        entries: [],
+        filtered: [],
+        selectedFx: null,
+        verdicts: { HIGH: true, MID: true, LOW: true, INCONCLUSIVE: true },
+        search: "",
+        sort: "score-desc",
+      };
+
+      const $ = (id) => document.getElementById(id);
+
+      async function init() {
+        let data;
+        try {
+          const res = await fetch("fx-baseline.json", { cache: "no-store" });
+          data = await res.json();
+        } catch (e) {
+          const isFile = location.protocol === "file:";
+          $("detail").innerHTML = isFile
+            ? '<div class="detail-empty">Browsers block <code>fetch()</code> on <code>file://</code>. Serve with <code>npm run inspect</code> (or <code>python3 -m http.server -d test_results 8080</code>) and open <code>http://localhost:8080</code>.</div>'
+            : '<div class="detail-empty">Could not load fx-baseline.json — run <code>npm run inspect:build</code> first.</div>';
+          return;
+        }
+        state.entries = data.entries;
+
+        $("count").textContent = `${state.entries.length} FX`;
+        $("summary").innerHTML = renderSummary(data);
+
+        $("search").addEventListener("input", (e) => {
+          state.search = e.target.value.trim().toLowerCase();
+          render();
+        });
+        $("sort").addEventListener("change", (e) => {
+          state.sort = e.target.value;
+          render();
+        });
+        for (const chip of $("filters").querySelectorAll(".chip")) {
+          chip.addEventListener("click", () => {
+            const v = chip.dataset.verdict;
+            state.verdicts[v] = !state.verdicts[v];
+            chip.dataset.on = state.verdicts[v] ? "1" : "0";
+            render();
+          });
+        }
+        document.addEventListener("keydown", onKey);
+
+        render();
+        if (state.filtered.length) select(state.filtered[0].fx);
+      }
+
+      function renderSummary(data) {
+        const c = data.counts;
+        const dt = new Date(data.generatedAt);
+        const ago = humanAgo(dt);
+        return `
+          <span><b class="ratio-good">${c.HIGH ?? 0}</b> HIGH</span>
+          <span><b class="ratio-mid">${c.MID ?? 0}</b> MID</span>
+          <span><b class="ratio-bad">${c.LOW ?? 0}</b> LOW</span>
+          <span><b>${c.INCONCLUSIVE ?? 0}</b> incon</span>
+          <span title="${dt.toISOString()}">· ${ago}</span>
+        `;
+      }
+
+      function humanAgo(dt) {
+        const ms = Date.now() - dt.getTime();
+        const m = Math.round(ms / 60000);
+        if (m < 1) return "just now";
+        if (m < 60) return `${m}m ago`;
+        const h = Math.round(m / 60);
+        if (h < 24) return `${h}h ago`;
+        const d = Math.round(h / 24);
+        return `${d}d ago`;
+      }
+
+      function applyFilter() {
+        const q = state.search;
+        let list = state.entries.filter((e) => {
+          if (!state.verdicts[e.verdict]) return false;
+          if (q && !e.fx.toLowerCase().includes(q)) return false;
+          return true;
+        });
+        list.sort(comparator(state.sort));
+        state.filtered = list;
+      }
+
+      function comparator(mode) {
+        const verdictOrder = { HIGH: 0, MID: 1, LOW: 2, INCONCLUSIVE: 3 };
+        const inconLast = (a, b) => {
+          const ai = a.verdict === "INCONCLUSIVE" ? 1 : 0;
+          const bi = b.verdict === "INCONCLUSIVE" ? 1 : 0;
+          return ai - bi;
+        };
+        switch (mode) {
+          case "score-desc":
+            return (a, b) => inconLast(a, b) || b.score - a.score;
+          case "score-asc":
+            return (a, b) => inconLast(a, b) || a.score - b.score;
+          case "name":
+            return (a, b) => a.fx.localeCompare(b.fx);
+          case "verdict":
+            return (a, b) =>
+              verdictOrder[a.verdict] - verdictOrder[b.verdict] ||
+              b.score - a.score;
+          default:
+            return (a, b) => b.score - a.score;
+        }
+      }
+
+      function render() {
+        applyFilter();
+        renderList();
+      }
+
+      function renderList() {
+        const html = state.filtered
+          .map((e) => {
+            const score = e.verdict === "INCONCLUSIVE" ? "—" : e.score.toFixed(1);
+            const mfccCls =
+              e.mfccDist == null
+                ? "ratio-bad"
+                : e.mfccDist <= 180
+                ? "ratio-good"
+                : e.mfccDist <= 250
+                ? "ratio-mid"
+                : "ratio-bad";
+            const sub = e.verdict === "INCONCLUSIVE"
+              ? "no shared signal"
+              : `RMS ${fmtRatio(e.rmsRatio)}× · L2 ${e.l2MelDb.toFixed(1)}dB · <span class="${mfccCls}">MFCC ${Math.round(e.mfccDist)}</span>`;
+            return `
+              <div class="row" data-fx="${e.fx}" ${state.selectedFx === e.fx ? 'data-active="1"' : ""}>
+                <div class="row-name">${e.fx}</div>
+                <div class="row-score">${score}</div>
+                <div class="row-sub"><span class="badge ${e.verdict}">${e.verdict}</span> ${sub}</div>
+              </div>
+            `;
+          })
+          .join("");
+        const list = $("list");
+        list.innerHTML = html || '<div class="png-missing">No FX match the current filters.</div>';
+        for (const row of list.querySelectorAll(".row")) {
+          row.addEventListener("click", () => select(row.dataset.fx));
+        }
+      }
+
+      function fmtRatio(r) {
+        if (r === null || r === undefined) return "—";
+        return r.toFixed(2);
+      }
+
+      function select(fx) {
+        state.selectedFx = fx;
+        for (const row of $("list").querySelectorAll(".row")) {
+          row.dataset.active = row.dataset.fx === fx ? "1" : "0";
+        }
+        const e = state.entries.find((x) => x.fx === fx);
+        if (e) renderDetail(e);
+      }
+
+      function renderDetail(e) {
+        const a = e.artifacts;
+        const desktopUrl = a.desktopWav ? encodeURI(a.desktopWav) : null;
+        const webUrl = a.webWav ? encodeURI(a.webWav) : null;
+        const score = e.verdict === "INCONCLUSIVE" ? "—" : e.score.toFixed(1);
+        const desktopStats = e.desktopStats;
+        const webStats = e.webStats;
+
+        const audioHtml = `
+          <div class="audio-grid">
+            <div class="audio-card">
+              <h3>Desktop SP <span>${desktopStats.duration.toFixed(2)}s · RMS ${desktopStats.rms.toFixed(4)} · peak ${desktopStats.peak.toFixed(4)}</span></h3>
+              ${
+                desktopUrl
+                  ? `<audio id="audio-desktop" controls preload="metadata" src="${desktopUrl}"></audio>`
+                  : '<div class="png-missing">desktop.wav missing</div>'
+              }
+            </div>
+            <div class="audio-card">
+              <h3>SonicPi.js (web) <span>${webStats.duration.toFixed(2)}s · RMS ${webStats.rms.toFixed(4)} · peak ${webStats.peak.toFixed(4)}</span></h3>
+              ${
+                webUrl
+                  ? `<audio id="audio-web" controls preload="metadata" src="${webUrl}"></audio>`
+                  : '<div class="png-missing">web.wav missing</div>'
+              }
+            </div>
+          </div>
+        `;
+
+        const syncHtml = `
+          <div class="sync-bar">
+            <button class="sync-btn" id="sync-play">▶ Play both</button>
+            <button class="sync-btn sec" id="sync-stop">■ Stop both</button>
+          </div>
+        `;
+
+        const spectroHtml = a.spectrogramPng
+          ? `<div class="png-block"><img src="${encodeURI(a.spectrogramPng)}" alt="spectrogram"></div>`
+          : '<div class="png-missing">spectrogram.png missing</div>';
+        const perBeatHtml = a.perBeatPng
+          ? `<div class="png-block"><img src="${encodeURI(a.perBeatPng)}" alt="per-beat metrics"></div>`
+          : '<div class="png-missing">perbeat.png missing.</div>';
+
+        const links = [];
+        if (a.report) links.push(`<a href="${encodeURI(a.report)}" target="_blank">comparator report.md ↗</a>`);
+        if (a.metrics) links.push(`<a href="${encodeURI(a.metrics)}" target="_blank">metrics.json ↗</a>`);
+        if (a.snippet) links.push(`<a href="${encodeURI(a.snippet)}" target="_blank">snippet.rb ↗</a>`);
+        if (desktopUrl) links.push(`<a href="${desktopUrl}" target="_blank">desktop.wav ↗</a>`);
+        if (webUrl) links.push(`<a href="${webUrl}" target="_blank">web.wav ↗</a>`);
+
+        const mfccBadgeCls =
+          e.mfccDist == null
+            ? "ratio-bad"
+            : e.mfccDist <= 180
+            ? "ratio-good"
+            : e.mfccDist <= 250
+            ? "ratio-mid"
+            : "ratio-bad";
+        $("detail").innerHTML = `
+          <div class="detail-head">
+            <h1>:${e.fx}</h1>
+            <span class="badge ${e.verdict}">${e.verdict}</span>
+            <span class="meta" style="margin:0">${e.flavor} · bpm ${e.bpm} · ${e.beats || "—"} beats · <span class="${mfccBadgeCls}">MFCC ${e.mfccDist == null ? "—" : Math.round(e.mfccDist)}</span></span>
+            <div class="score">${score} <small>/ 100</small></div>
+          </div>
+
+          ${audioHtml}
+          ${syncHtml}
+
+          <div class="section-h">Reference snippet</div>
+          <pre class="snippet" id="snippet-block">loading…</pre>
+
+          <div class="section-h">Spectrogram comparison (Desktop SP vs Web)</div>
+          ${spectroHtml}
+
+          <div class="section-h">Per-beat divergence</div>
+          ${perBeatHtml}
+
+          <div class="section-h">Stats</div>
+          <table class="metrics">
+            <thead><tr><th>Metric</th><th>Desktop SP</th><th>SonicPi.js</th><th>ratio (web/desktop)</th></tr></thead>
+            <tbody>
+              <tr><td>Duration (s)</td><td>${desktopStats.duration.toFixed(3)}</td><td>${webStats.duration.toFixed(3)}</td><td>${ratioCell(webStats.duration, desktopStats.duration)}</td></tr>
+              <tr><td>Peak</td><td>${desktopStats.peak.toFixed(4)}</td><td>${webStats.peak.toFixed(4)}</td><td>${ratioCell(webStats.peak, desktopStats.peak)}</td></tr>
+              <tr><td>RMS</td><td>${desktopStats.rms.toFixed(4)}</td><td>${webStats.rms.toFixed(4)}</td><td>${ratioCell(webStats.rms, desktopStats.rms)}</td></tr>
+              <tr><td>Clipping (%)</td><td>${desktopStats.clipping.toFixed(2)}</td><td>${webStats.clipping.toFixed(2)}</td><td>—</td></tr>
+              <tr><td>Sample rate</td><td>${desktopStats.sampleRate}</td><td>${webStats.sampleRate}</td><td>—</td></tr>
+              <tr><td>L2 (mel-dB)</td><td colspan="2" style="text-align:center;color:var(--text)">${e.l2MelDb.toFixed(2)}</td><td>—</td></tr>
+              <tr><td>MFCC distance</td><td colspan="2" style="text-align:center;color:var(--text)">${e.mfccDist.toFixed(2)}</td><td>—</td></tr>
+            </tbody>
+          </table>
+
+          ${e.perBeat.length ? renderPerBeat(e) : ""}
+
+          <div class="links">${links.join("")}</div>
+
+          <div class="footer-meta">
+            <strong>Tiers:</strong>
+            <span class="ratio-good">HIGH</span> = score ≥ 70 AND MFCC ≤ 180 ·
+            <span class="ratio-mid">MID</span> = 50 ≤ score &lt; 70 (or HIGH-by-score-only-but-MFCC > 180) ·
+            <span class="ratio-bad">LOW</span> = score &lt; 50 ·
+            INCONCLUSIVE = desktop silent.
+            <br />
+            Score: 0.30·ratio(rms) + 0.15·ratio(peak) + 0.30·l2 + 0.25·mfcc.
+            Source: <code>.captures/</code>.
+          </div>
+        `;
+
+        if (a.snippet) {
+          fetch(a.snippet)
+            .then((r) => r.text())
+            .then((t) => {
+              const el = $("snippet-block");
+              if (el) el.textContent = t;
+            })
+            .catch(() => {
+              const el = $("snippet-block");
+              if (el) el.textContent = "(could not load snippet — try serving over http)";
+            });
+        }
+
+        wireSyncButtons();
+      }
+
+      function ratioCell(num, denom) {
+        if (!denom || !num) return "—";
+        const r = num / denom;
+        const cls = Math.abs(Math.log2(r)) <= 0.5
+          ? "ratio-good"
+          : Math.abs(Math.log2(r)) <= 1
+          ? "ratio-mid"
+          : "ratio-bad";
+        return `<span class="${cls}">${r.toFixed(2)}×</span>`;
+      }
+
+      function renderPerBeat(e) {
+        const div = new Set(e.mostDivergentBeats);
+        const rows = e.perBeat
+          .map(
+            (r) => `
+          <tr class="${div.has(r.beat) ? "divergent" : ""}">
+            <td>${r.beat}</td>
+            <td>${r.desktop_rms.toFixed(4)}</td>
+            <td>${r.web_rms.toFixed(4)}</td>
+            <td>${r.desktop_peak.toFixed(4)}</td>
+            <td>${r.web_peak.toFixed(4)}</td>
+            <td>${r.mfcc_distance.toFixed(2)}</td>
+          </tr>
+        `,
+          )
+          .join("");
+        return `
+          <div class="section-h">Per-beat table (highlighted = top-3 most divergent)</div>
+          <table class="perbeat">
+            <thead><tr><th>Beat</th><th>desktop RMS</th><th>web RMS</th><th>desktop peak</th><th>web peak</th><th>MFCC dist</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        `;
+      }
+
+      function wireSyncButtons() {
+        const play = $("sync-play");
+        const stop = $("sync-stop");
+        const desk = $("audio-desktop");
+        const web = $("audio-web");
+        if (!play || !stop) return;
+        play.addEventListener("click", async () => {
+          if (!desk && !web) return;
+          if (desk) desk.currentTime = 0;
+          if (web) web.currentTime = 0;
+          const promises = [];
+          if (desk) promises.push(desk.play());
+          if (web) promises.push(web.play());
+          try {
+            await Promise.all(promises);
+          } catch (err) {
+            console.warn("[inspector] sync play blocked by browser autoplay policy?", err);
+          }
+        });
+        stop.addEventListener("click", () => {
+          if (desk) {
+            desk.pause();
+            desk.currentTime = 0;
+          }
+          if (web) {
+            web.pause();
+            web.currentTime = 0;
+          }
+        });
+      }
+
+      function onKey(ev) {
+        if (
+          ev.target instanceof HTMLInputElement ||
+          ev.target instanceof HTMLSelectElement ||
+          ev.target instanceof HTMLTextAreaElement
+        )
+          return;
+        const list = state.filtered;
+        if (!list.length) return;
+        const i = list.findIndex((x) => x.fx === state.selectedFx);
+        if (ev.key === "ArrowDown" || ev.key === "j") {
+          ev.preventDefault();
+          select(list[Math.min(list.length - 1, i + 1)].fx);
+          scrollSelectedIntoView();
+        } else if (ev.key === "ArrowUp" || ev.key === "k") {
+          ev.preventDefault();
+          select(list[Math.max(0, i - 1)].fx);
+          scrollSelectedIntoView();
+        } else if (ev.key === " ") {
+          const btn = $("sync-play");
+          if (btn) {
+            ev.preventDefault();
+            btn.click();
+          }
+        }
+      }
+
+      function scrollSelectedIntoView() {
+        const row = $("list").querySelector('.row[data-active="1"]');
+        if (row) row.scrollIntoView({ block: "nearest" });
+      }
+
+      init();
+    </script>
+  </body>
+</html>
