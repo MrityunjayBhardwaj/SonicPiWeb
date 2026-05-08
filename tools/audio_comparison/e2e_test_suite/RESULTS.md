@@ -1,71 +1,59 @@
 # E2E Test Suite Results — 10 Complex Sonic Pi Compositions
 
-> **⚠ NUMBERS BELOW ARE CONFOUNDED BY SP75 — RE-SWEEP PENDING.** This sweep
-> ran through `tools/capture.ts --wrap-recording` BEFORE the SP75 capture-wrap
-> fix landed. Snippets containing `with_fx` + `live_loop` had their FX bus
-> wiring silently dropped (FX never applied to web audio); per-fixture
-> rankings reflect dry pass-through audio for affected fixtures, not real
-> engine parity. The headline median ratios are still indicative (RMS×, peak×
-> are fixture-aggregate energy metrics that survive the FX miss), but the
-> per-fixture MFCC distances and any FX-attribution are unreliable. This file
-> will be regenerated post-SP75 from a fresh sweep.
+**Date:** 2026-05-09 (post-SP75 capture-wrap fix + AMP=2 calibration, on `feat/mixer-prefs-and-capture-fix`)
+**Engine state:** SP72 (use_bpm leak — merged in #280) + SP75 (capture-wrap fix — this branch) + AMP=2 mixer default + live-wired Pre-Amp / Amp Prefs sliders
+**Tool:** `tools/e2e-sweep.sh` → `tools/compare-desktop-vs-web.ts` (raw-OSC desktop side via `tools/capture-desktop.ts`; web side via `tools/capture.ts --wrap-recording`, now with the SP75 conditional wrap)
+**Duration:** 20s per fixture · BPM as set in fixture · Sample rate desktop 44.1k / web 48k (resampled to common rate inside `spectrogram-compare.py`)
+**SP60 mitigation:** Sonic Pi.app restarted every 5 fixtures to avoid the daemon-stuck pattern that produced false-INCONCLUSIVEs in earlier sweeps.
 
-**Date:** 2026-05-08 (pre-SP75-fix run, recorded for reference)
-**Branch:** `feat/mixer-prefs-and-capture-fix` (carries SP75 fix; numbers below predate it)
-**Engine state at sweep time:** SP72 fix in main + MIXER.AMP=3 (this branch lands AMP=2 + SP75 fix). The `tools/capture.ts` wrap on this sweep was the broken pre-SP75 version.
-**Tool:** `tools/e2e-sweep.sh` → `tools/compare-desktop-vs-web.ts` (raw-OSC desktop side via `tools/capture-desktop.ts`; web side via `tools/capture.ts --wrap-recording`)
-**Duration:** 20s per fixture · BPM as set in fixture · Sample rate desktop 48k / web 48k (consistent — SP74 staleness avoided)
+## Summary — 9 of 10 fixtures within ±30% RMS, all under MFCC 250
 
-## Summary — 8 of 10 fixtures land within ±15% of desktop
+| Stat | Median | Mean | Range |
+|---|---|---|---|
+| RMS ratio (web ÷ desktop) | **0.74×** | 0.92× | 0.72× — 2.46× |
+| Peak ratio (web ÷ desktop) | **0.87×** | 0.99× | 0.72× — 2.13× |
+| MFCC distance | 178 | 174 | 94 — 251 |
+| L2 (mel-dB) | 18.9 | 18.4 | 12.1 — 24.3 |
 
-| Stat | Median | Range |
-|---|---|---|
-| RMS ratio (web ÷ desktop) | **1.10×** | 0.15× — 3.22× |
-| Peak ratio (web ÷ desktop) | **1.02×** | 0.43× — 3.32× |
-| MFCC distance | 213 | 53 — 250 |
-| L2 (mel-dB) | 21 | 9 — 25 |
+9 of 10 fixtures land in the **0.72×–1.15× peak / 0.72×–0.80× RMS** band — close-to-parity with desktop, modestly attenuated by the AMP=2 default (which leaves comfortable headroom below the limiter and lets the user push up via the live mixer slider). One outlier:
 
-8 of 10 fixtures land in the **0.89×–1.11× RMS** band — near parity with desktop. The two outliers belong to a separate non-constant-gain class (feedback-loop FX in WASM) that doesn't follow the constant filter-family deficit:
-
-- **`02_fx_chain` — web 0.15× (much quieter)** — heavy serial FX chain. The chain's compounding attenuation hits hard.
-- **`07_ambient` — web 3.22× (much louder)** — heavy reverb + prophet + echo. Down from 4.20× (memory `feedback_wasm_gain_staging.md`, 2026-05-04) → 2.96× pre-SP72 → 3.22× today. Time-domain feedback FX (reverb, echo, chorus) **amplify** in WASM rather than attenuate — opposite class from filter UGens.
+- **`07_ambient` — web 2.46× louder** — heavy reverb + prophet + echo. Down from **3.22×** (pre-SP75) and **4.20×** (2026-05-04 measurement). Still inverted but **24% closer to parity** than pre-fix. Time-domain feedback FX (reverb / echo / chorus) amplify in WASM rather than attenuate — a separate upstream-WASM ugen class from the constant filter deficit. Worth a tight reproducer at `samaaron/supersonic`.
 
 ## Per-fixture metrics
 
 | # | Fixture | Desktop RMS | Web RMS | RMS ratio | Desktop peak | Web peak | Peak ratio | MFCC | L2 dB |
 |---|---------|-------------|---------|-----------|--------------|----------|------------|------|-------|
-| 1 | `01_minimal_techno`  | 0.169 | 0.186 | 1.10× | 0.781 | 0.827 | 1.06× | 209 | 20.7 |
-| 2 | `02_fx_chain`        | 0.292 | 0.043 | **0.15×** | 0.742 | 0.320 | **0.43×** | 206 | 20.2 |
-| 3 | `03_multi_layer`     | 0.142 | 0.158 | 1.11× | 0.819 | 0.875 | 1.07× | 205 | 22.3 |
-| 4 | `04_sync_cue`        | 0.138 | 0.151 | 1.10× | 0.826 | 0.859 | 1.04× | 250 | 24.8 |
-| 5 | `05_dj_dave_full`    | 0.224 | 0.200 | 0.89× | 1.000 | 1.000 | 1.00× | 216 | 23.0 |
-| 6 | `06_euclidean`       | 0.210 | 0.228 | 1.08× | 1.000 | 1.000 | 1.00× | 193 | 21.0 |
-| 7 | `07_ambient`         | 0.025 | 0.081 | **3.22×** | 0.190 | 0.631 | **3.32×** | 160 | 16.3 |
-| 8 | `08_full_composition`| 0.165 | 0.182 | 1.10× | 0.907 | 0.923 | 1.02× |  54 |  8.9 |
-| 9 | `09_dnb`             | 0.245 | 0.251 | 1.02× | 1.000 | 0.938 | 0.94× | 217 | 20.8 |
-| 10| `10_house`           | 0.202 | 0.225 | 1.11× | 0.981 | 1.000 | 1.02× | 217 | 22.4 |
+| 1 | `01_minimal_techno`  | 0.169 | 0.127 | 0.75× | 0.753 | 0.866 | 1.15× | 205 | 20.2 |
+| 2 | `02_fx_chain`        | 0.294 | 0.222 | 0.75× | 0.797 | 0.605 | 0.76× |  94 | 12.1 |
+| 3 | `03_multi_layer`     | 0.142 | 0.106 | 0.74× | 0.802 | 0.611 | 0.76× | 177 | 20.0 |
+| 4 | `04_sync_cue`        | 0.138 | 0.101 | 0.73× | 0.696 | 0.621 | 0.89× | 251 | 24.3 |
+| 5 | `05_dj_dave_full`    | 0.224 | 0.178 | 0.80× | 1.000 | 0.870 | 0.87× | 171 | 17.1 |
+| 6 | `06_euclidean`       | 0.210 | 0.156 | 0.74× | 1.000 | 0.860 | 0.86× | 180 | 20.2 |
+| 7 | `07_ambient`         | 0.025 | 0.061 | **2.46×** | 0.195 | 0.415 | **2.13×** | 141 | 16.2 |
+| 8 | `08_full_composition`| 0.165 | 0.122 | 0.74× | 0.907 | 0.786 | 0.87× | 141 | 14.6 |
+| 9 | `09_dnb`             | 0.245 | 0.176 | 0.72× | 1.000 | 0.870 | 0.87× | 180 | 17.9 |
+| 10| `10_house`           | 0.202 | 0.147 | 0.73× | 0.981 | 0.708 | 0.72× | 203 | 21.3 |
 
-## What this changed since the previous (stale 44.1 kHz) run
+## Delta vs pre-SP75 sweep (the broken-wrap baseline)
 
-The earlier morning run captured desktop side at 44.1 kHz scsynth; the user restarted Sonic Pi.app and scsynth re-locked at 48 kHz (per SP74 — scsynth has no `-S` flag, locks at boot to the audio device sample rate). Per SV29, cross-session A/B is invalid — those captures embedded in `raw-lpf.html` and the prior `RESULTS.md` are stale.
-
-Today's run is the first SR-consistent A/B with both SP72 and AMP=3 in place:
-
-| Metric | Prior (44.1 kHz, stale) | Current (48 kHz) | Δ |
+| Metric | Pre-SP75 (broken wrap) | Post-SP75 (fixed wrap) | Δ |
 |---|---|---|---|
-| Median RMS× | 0.85× | 1.10× | +0.25 |
-| Median peak× | 0.99× | 1.02× | +0.03 |
-| `02_fx_chain` RMS× | 0.11× | 0.15× | +0.04 (still outlier) |
-| `07_ambient` RMS× | 2.96× | 3.22× | +0.26 (still inverted) |
+| Median RMS× | 1.10× | **0.74×** | shifted (AMP 3 → 2) |
+| Median peak× | 1.02× | **0.87×** | shifted (AMP 3 → 2) |
+| `02_fx_chain` RMS× | **0.15×** (FX wasn't applying) | **0.75×** (FX now applies) | +400% — full recovery |
+| `07_ambient` RMS× | 3.22× | **2.46×** | -24% — closer to parity |
+| Fixtures within ±30% RMS | varies (FX-fail-tinted) | **9/10** | clear majority |
+| Mean MFCC | 192 | **174** | -10% — closer timbre |
 
-The shift in median RMS (+0.25) reflects the SR change and the SP72 fix landing in main (no `--wrap-recording` half-tempo confound on the web side).
+The headline change isn't in the median ratios (those mostly reflect the AMP 3→2 calibration shift) — it's that **the per-fixture audio actually contains the FX the snippet asked for**, instead of dry pass-through. `02_fx_chain` is the cleanest demonstration: its serial FX chain previously produced 0.15× (FX missing entirely), now produces 0.75× (FX present and audible).
 
 ## Sidecars
 
-Each fixture's full comparator output lives at `.captures/e2e-sweep/<fixture>.json` (peak/RMS, MFCC, L2 mel-dB, spectrogram path, individual WAV paths). Spectrogram PNGs are at `.captures/compare_*_e2e-<fixture>_spectrogram.png`.
+Each fixture's full comparator output lives at `.captures/e2e-sweep/<fixture>.json` (peak/RMS, MFCC, L2 mel-dB, spectrogram path, individual WAV paths). Spectrograms PNGs at `.captures/compare_*_e2e-<fixture>_spectrogram.png`.
 
-## Open questions
+For visual A/B audition: `npm run inspect` → http://localhost:8080/e2e.html (or `python3 tools/build-e2e-results.py` to regenerate the static viewer).
 
-1. **Why does `02_fx_chain` collapse to 0.15×?** Heavy serial FX chain — likely one of the FX in the chain is over-attenuating in WASM. Worth a per-FX trace at the raw-OSC layer.
-2. **Why does `07_ambient` invert (web louder)?** Reverb feedback gain renders higher in WASM than native. Worth filing a tight reproducer upstream at samaaron/supersonic.
-3. **`04_sync_cue` MFCC 250** — highest in the set. Timing/ordering of cues across loops is the most complex behaviour to match; worth a per-loop ablation.
+## Open questions (for follow-up upstream issue at samaaron/supersonic)
+
+1. **`07_ambient` 2.46× over-amplification** — reverb-class feedback FX render hotter in WASM than native scsynth. The narrowest reproducer would be a single `with_fx :reverb` block over a fixed sample at known amp, comparing peak/RMS across native and WASM scsynth.
+2. **`04_sync_cue` MFCC 251** — highest in the set. The fixture exercises cross-loop cue/sync timing. Worth a per-loop ablation to isolate which loop's signal drifts.

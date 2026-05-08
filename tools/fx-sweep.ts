@@ -285,6 +285,33 @@ function metricsFromSidecar(fx: FxSpec, jsonPath: string): FxMetrics {
   return m
 }
 
+/** SP60 mitigation: kill Sonic Pi.app, relaunch, wait for scsynth to come up.
+ *  Called between sweep chunks to clear cumulative daemon stuck-state that
+ *  surfaces as "no WAV produced" past ~6 captures. ~10s total cost. */
+async function restartSonicPi(): Promise<void> {
+  await new Promise<void>((res) => {
+    const k = spawn('pkill', ['-f', 'Sonic Pi.app'])
+    k.on('close', () => res())
+  })
+  await new Promise((r) => setTimeout(r, 1500))
+  await new Promise<void>((res) => {
+    const o = spawn('open', ['-a', 'Sonic Pi'])
+    o.on('close', () => res())
+  })
+  // Poll for scsynth — typical boot is 5–8s on macOS.
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 500))
+    const p = spawn('pgrep', ['-f', 'scsynth -u'])
+    const ok = await new Promise<boolean>((res) => p.on('close', (code) => res(code === 0)))
+    if (ok) {
+      // Extra settle time so scsynth's first /s_new doesn't race the boot.
+      await new Promise((r) => setTimeout(r, 2500))
+      return
+    }
+  }
+  throw new Error('Sonic Pi.app failed to relaunch — scsynth not detected within 15s')
+}
+
 async function runFx(fx: FxSpec): Promise<FxMetrics> {
   const snippetPath = resolve(SWEEP_DIR, `snippet-${fx.name}.rb`)
   writeFileSync(snippetPath, renderSnippet(fx))
@@ -658,7 +685,17 @@ async function main(): Promise<void> {
   console.log(`  duration=${SWEEP_DURATION_MS}ms · bpm=${SWEEP_BPM} · beats=${SWEEP_BEATS}\n`)
 
   const rows: SweepRow[] = []
+  // SP60 mitigation: Sonic Pi.app's daemon gets stuck after ~6 consecutive
+  // recording_save captures (no WAV produced even though /run-code dispatches).
+  // Restart the app every SONIC_PI_RESTART_INTERVAL FX so the daemon stays
+  // healthy. ~3-second restart cost amortises across the chunk.
+  const SONIC_PI_RESTART_INTERVAL = 5
   for (let i = 0; i < fxToRun.length; i++) {
+    if (i > 0 && i % SONIC_PI_RESTART_INTERVAL === 0) {
+      process.stdout.write(`  ↻ restarting Sonic Pi.app (SP60 mitigation, every ${SONIC_PI_RESTART_INTERVAL} FX)... `)
+      await restartSonicPi()
+      console.log('ready')
+    }
     const fx = fxToRun[i]
     process.stdout.write(`[${i + 1}/${fxToRun.length}] :${fx.name} (${fx.flavor})... `)
     const m = await runFx(fx)

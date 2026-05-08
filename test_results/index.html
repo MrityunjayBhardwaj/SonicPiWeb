@@ -512,16 +512,21 @@
           </h2>
           <div class="summary" id="summary"></div>
           <div class="context-note">
-            <b>Sweep state (2026-05-08 · post SP72 + AMP=3, SR-consistent at 48 kHz):</b> mean score
-            <b class="ratio-good">37.9 → 58.4</b> · LOW count <b class="ratio-good">32 → 7</b>
-            · HIGH <b class="ratio-good">0 → 1</b> (<code>wobble</code> 75.0 — clears both score≥70 AND MFCC≤180).
-            SP72 fix (use_bpm leak in nested <code>live_loop</code> under <code>--wrap-recording</code>, merged in #280)
-            + MIXER.AMP 1.2 → 3 (empirical compensation for WASM scsynth output deficit, characterised in
-            <a href="raw-lpf.html">raw-lpf.html</a>).
-            Remaining LOW (7): filter family (<code>bpf</code>, <code>rbpf</code>, <code>hpf</code>, <code>rhpf</code>) + non-linear (<code>tanh</code>) + reverb (<code>gverb</code>) + sustained-modulation (<code>vowel</code>).
-            INCONCLUSIVE: <code>delay</code>, <code>chorus</code> (desktop silent — SP63).
+            <b>Sweep state (2026-05-09 · post SP75 capture-wrap fix + AMP=2):</b> mean score
+            <b class="ratio-good">58.4 → 66.9</b> · HIGH <b class="ratio-good">1 → 7</b>
+            · LOW <b class="ratio-good">7 → 1</b> · 13 tier upgrades.
+            Top SP75 recoveries (LOW → MID/HIGH): <code>vowel</code> 45→78 ✓, <code>gverb</code> 48→75, <code>hpf</code> 27→53, <code>tanh</code> 41→62, <code>rbpf</code> 18→64, <code>bpf</code> 18→52.
+            New HIGH tier (score≥70 AND MFCC≤180): <code>echo</code>, <code>octaver</code>, <code>panslicer</code>, <code>ping_pong</code>, <code>slicer</code>, <code>vowel</code>, <code>ixi_techno</code>.
             <br><br>
-            <b>Companion view:</b> <a href="e2e.html">e2e.html</a> — 10 full compositions, A/B desktop ↔ web with spectrograms.
+            SP75 fixed <code>tools/capture.ts</code> — the prior <code>in_thread</code> wrap silently dropped FX bus wiring for <code>with_fx</code> + <code>live_loop</code> snippets, capturing dry pass-through audio (4 rhythmic FX collapsed to identical peak <code>0.666</code>). Fix runs async-by-construction snippets at top level so the engine FX-scope tracker fires.
+            PR also lands SP70 (Recorder.ts opus → raw float32), SP68 (bus stride-2), MIXER.AMP=2 default, and live-wired Mixer Pre-Amp / Amp Prefs sliders.
+            Remaining LOW (1): <code>nlpf</code> — real upstream WASM ugen anomaly, no longer hidden by capture-tool artifact.
+            INCONCLUSIVE (2): <code>delay</code>, <code>chorus</code> (desktop silent — SP63).
+            One regression: <code>wobble</code> 75→69 (HIGH→MID) — likely scored HIGH on dry coincidence pre-fix; real FX-applied audio shows timbre divergence.
+            <br><br>
+            <b>Companion view:</b> <a href="e2e.html">e2e.html</a> — 10 full compositions A/B; <code>02_fx_chain</code> recovered 0.15× → 0.75× (chain FX now applies); <code>07_ambient</code> reverb feedback still over-amplifies 3.22× → 2.46× (upstream WASM ugen).
+            <br>
+            <b>Investigation:</b> <a href="raw-lpf.html">raw-lpf.html</a> — 7-pass empirical evidence page (SP72 / SP74 / SP75 lineage).
           </div>
           <div class="controls">
             <input
