@@ -29,6 +29,8 @@ test_results/fx/
 test_results/fx-baseline.json
 test_results/e2e/
 test_results/e2e.html
+test_results/community/
+test_results/community.html
 test_results/raw-lpf/
 
 # Playwright

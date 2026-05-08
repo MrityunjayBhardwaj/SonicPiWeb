@@ -524,7 +524,10 @@
             INCONCLUSIVE (2): <code>delay</code>, <code>chorus</code> (desktop silent — SP63).
             One regression: <code>wobble</code> 75→69 (HIGH→MID) — likely scored HIGH on dry coincidence pre-fix; real FX-applied audio shows timbre divergence.
             <br><br>
-            <b>Companion view:</b> <a href="e2e.html">e2e.html</a> — 10 full compositions A/B; <code>02_fx_chain</code> recovered 0.15× → 0.75× (chain FX now applies); <code>07_ambient</code> reverb feedback still over-amplifies 3.22× → 2.46× (upstream WASM ugen).
+            <b>Companion views:</b>
+            <a href="e2e.html">e2e.html</a> — 10 curated compositions A/B; <code>02_fx_chain</code> recovered 0.15× → 0.75× (chain FX now applies); <code>07_ambient</code> reverb feedback still over-amplifies 3.22× → 2.46× (upstream WASM ugen).
+            <br>
+            <a href="community.html">community.html</a> — <b>48 community + forum compositions</b> (28 community, 20 in-thread-forum); 46/48 captured, median RMS× 0.78 / peak× 0.94 / MFCC 161. Outliers cluster into two upstream-WASM classes: feedback-FX over-amplification (e.g. <code>19_ambient_lead</code> 10.8×, <code>47_fibonacci_zoomies</code> 4.7×) and heavy-filter-chain attenuation (e.g. <code>43_exploring_tb303</code> 0.09×, <code>33_dub_reverb</code> 0.10×).
             <br>
             <b>Investigation:</b> <a href="raw-lpf.html">raw-lpf.html</a> — 7-pass empirical evidence page (SP72 / SP74 / SP75 lineage).
           </div>
