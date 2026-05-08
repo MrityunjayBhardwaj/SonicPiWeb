@@ -106,6 +106,183 @@ def peak_frequency(audio: np.ndarray, sr: int) -> float:
     return float(freqs[int(np.argmax(spec))])
 
 
+# ---------------------------------------------------------------------------
+# Precondition probes (SV29 candidate)
+#
+# l2_spectral_distance, mfcc_distance, and per_beat_compare all silently
+# assume the two WAVs share signal shape — similar onset density, similar
+# tempo, similar total energy. When that assumption is violated (codec
+# round-trip damage, use_bpm scope leak, stuck-renderer artifact, etc.)
+# the metrics still return a number, but it answers a different question
+# than the caller meant. The probes below detect three common violation
+# classes BEFORE the score-bearing metrics run, so the comparator can
+# refuse to interpret a confounded comparison.
+# ---------------------------------------------------------------------------
+
+def _envelope_at_hop(audio: np.ndarray, sr: int, hop_s: float) -> np.ndarray:
+    """RMS envelope at hop_s seconds, smoothed over the same window."""
+    win = max(1, int(hop_s * sr))
+    smoothed = np.sqrt(np.convolve(audio.astype(np.float64) ** 2, np.ones(win) / win, mode="same"))
+    step = max(1, int(sr * hop_s))
+    return smoothed[::step]
+
+
+def count_onset_clusters(audio: np.ndarray, sr: int, hop_s: float = 0.005) -> int:
+    """Count distinct hit clusters in audio.
+
+    Envelope-cluster onset count: rising edges through 30% of the max
+    envelope value, then merge edges within 100ms into one cluster (the
+    envelope rise of a single drum hit can spawn several adjacent edges).
+    Returns 0 for silent or near-silent input.
+    """
+    env = _envelope_at_hop(audio, sr, hop_s)
+    if env.size == 0:
+        return 0
+    peak = float(env.max())
+    if peak < 1e-4:
+        return 0
+    above = env > peak * 0.30
+    edges = np.where(np.diff(above.astype(np.int8)) > 0)[0]
+    if edges.size == 0:
+        return 0
+    clusters = 1
+    last = edges[0]
+    merge_gap_steps = max(1, int(0.1 / hop_s))
+    for e in edges[1:]:
+        if e - last >= merge_gap_steps:
+            clusters += 1
+        last = e
+    return clusters
+
+
+def envelope_best_lag_ms(audio_d: np.ndarray, audio_w: np.ndarray, sr: int, hop_s: float = 0.01) -> float:
+    """Best alignment lag (ms) between two RMS envelopes via cross-correlation.
+
+    Both inputs must be at the same sample rate. Returns the absolute lag at
+    which the cross-correlation peaks; 0 means perfect time alignment, large
+    values mean one side leads/lags the other (tempo divergence, dropped
+    leading silence, etc.). Computed on a 10ms-hop envelope so the FFT cost
+    is small even for multi-second WAVs.
+    """
+    env_d = _envelope_at_hop(audio_d, sr, hop_s)
+    env_w = _envelope_at_hop(audio_w, sr, hop_s)
+    n = min(env_d.size, env_w.size)
+    if n < 4:
+        return 0.0
+    a = env_d[:n] - env_d[:n].mean()
+    b = env_w[:n] - env_w[:n].mean()
+    if not np.any(a) or not np.any(b):
+        return 0.0
+    xc = np.correlate(a, b, mode="full")
+    best = int(np.argmax(xc))
+    lag_steps = best - (n - 1)
+    return float(abs(lag_steps) * hop_s * 1000.0)
+
+
+def verify_preconditions(
+    audio_d: np.ndarray, sr_d: int, audio_w: np.ndarray, sr_w: int,
+) -> dict:
+    """Run three precondition probes; report per-probe pass/fail + summary.
+
+    Probes (cheap, run in ~tens of ms on a few-second WAV):
+      1. onset_count  — distinct hit clusters per side, ratio in [0.7, 1.4].
+                        Catches tempo divergence, dropped events, doubled events.
+                        Skipped (probe marked `skipped`) when both sides have
+                        fewer than 3 hits — sample size too small to test.
+      2. envelope_lag — best cross-correlation lag of RMS envelopes ≤ 100ms.
+                        Catches drift, leading-silence mismatch, gross tempo
+                        misalignment.
+      3. energy_x_duration — (RMS² · duration) ratio in [0.5, 2.0].
+                        Catches large total-energy divergence (silent side,
+                        codec damage that drops energy non-uniformly).
+
+    A probe is `ok=true` when within tolerance, `ok=false` (and named in
+    `failed`) when out. `skipped=true` means the probe didn't have enough
+    signal to test reliably and is not counted as a violation.
+
+    Caller: spectrogram-compare main() — embeds the result in the JSON output
+    as `comparison.preconditions`. When `violated=true`, downstream consumers
+    should refuse to interpret the L2/MFCC/per-beat numbers as a parity score.
+    """
+    # Onsets — count per side (assumes sample rates are already normalized
+    # by the caller, which they are at the call site below).
+    n_d = count_onset_clusters(audio_d, sr_d)
+    n_w = count_onset_clusters(audio_w, sr_w)
+    if n_d < 3 and n_w < 3:
+        onset_probe = {
+            "desktop_hits": int(n_d),
+            "web_hits": int(n_w),
+            "ratio": None,
+            "tolerance": "[0.7, 1.4]",
+            "ok": True,
+            "skipped": True,
+            "skip_reason": "fewer than 3 hits on both sides — sample too small",
+        }
+    else:
+        onset_ratio = (n_w + 1e-6) / (n_d + 1e-6)
+        onset_ok = 0.7 <= onset_ratio <= 1.4
+        onset_probe = {
+            "desktop_hits": int(n_d),
+            "web_hits": int(n_w),
+            "ratio": round(onset_ratio, 3),
+            "tolerance": "[0.7, 1.4]",
+            "ok": bool(onset_ok),
+            "skipped": False,
+        }
+
+    # Envelope lag — sample rates are normalized at the call site, so we
+    # can pass the same sr to both.
+    lag_ms = envelope_best_lag_ms(audio_d, audio_w, sr_d)
+    lag_ok = lag_ms <= 100.0
+    lag_probe = {
+        "best_lag_ms": round(lag_ms, 1),
+        "tolerance_ms": 100,
+        "ok": bool(lag_ok),
+        "skipped": False,
+    }
+
+    # Energy × duration — silent or much-quieter side flags as violation.
+    rms_d = float(np.sqrt(np.mean(audio_d.astype(np.float64) ** 2)))
+    rms_w = float(np.sqrt(np.mean(audio_w.astype(np.float64) ** 2)))
+    dur_d = float(audio_d.size / sr_d) if sr_d else 0.0
+    dur_w = float(audio_w.size / sr_w) if sr_w else 0.0
+    e_d = rms_d * rms_d * dur_d
+    e_w = rms_w * rms_w * dur_w
+    if e_d < 1e-9 and e_w < 1e-9:
+        energy_probe = {
+            "desktop": round(e_d, 9),
+            "web": round(e_w, 9),
+            "ratio": None,
+            "tolerance": "[0.5, 2.0]",
+            "ok": True,
+            "skipped": True,
+            "skip_reason": "both sides effectively silent — no energy to compare",
+        }
+    else:
+        energy_ratio = (e_w + 1e-9) / (e_d + 1e-9)
+        energy_ok = 0.5 <= energy_ratio <= 2.0
+        energy_probe = {
+            "desktop": round(e_d, 9),
+            "web": round(e_w, 9),
+            "ratio": round(energy_ratio, 3),
+            "tolerance": "[0.5, 2.0]",
+            "ok": bool(energy_ok),
+            "skipped": False,
+        }
+
+    probes = {
+        "onset_count": onset_probe,
+        "envelope_lag": lag_probe,
+        "energy_x_duration": energy_probe,
+    }
+    failed = [k for k, v in probes.items() if not v["ok"] and not v.get("skipped")]
+    return {
+        "probes": probes,
+        "violated": len(failed) > 0,
+        "failed": failed,
+    }
+
+
 def slice_beats(audio: np.ndarray, sr: int, bpm: float, beats: int) -> list[np.ndarray]:
     """Slice audio into `beats` windows of (60/bpm) seconds each, from t=0.
 
@@ -275,6 +452,12 @@ def main() -> int:
         audio_w = librosa.resample(audio_w.astype(np.float32), orig_sr=sr_w_raw, target_sr=sr)
     sr_d = sr_w = sr
 
+    # Precondition probes (SV29 candidate). Run AFTER sample-rate normalization
+    # so onset and lag measurements compare like-for-like, but BEFORE the
+    # score-bearing metrics so the JSON output can flag a comparison as
+    # uninterpretable without recomputing.
+    preconditions = verify_preconditions(audio_d, sr_d, audio_w, sr_w)
+
     mel_d = mel_db(audio_d, sr_d)
     mel_w = mel_db(audio_w, sr_w)
 
@@ -327,6 +510,7 @@ def main() -> int:
             "mfcc_distance": mfcc_distance(audio_d, sr_d, audio_w, sr_w),
             "frames_compared": int(n_frames),
             "spectrogram_png": out_png,
+            "preconditions": preconditions,
         },
     }
 
@@ -341,11 +525,14 @@ def main() -> int:
         json.dump(metrics, f, indent=2)
 
     # Echo a one-line summary so the caller can grep stdout
+    pre_tag = "PRECONDITION-VIOLATED " if preconditions["violated"] else ""
     summary = (
-        f"spectrogram OK · L2(mel-dB)={metrics['comparison']['l2_mel_db']:.2f} · "
+        f"spectrogram {pre_tag}OK · L2(mel-dB)={metrics['comparison']['l2_mel_db']:.2f} · "
         f"MFCC dist={metrics['comparison']['mfcc_distance']:.2f} · "
         f"png={out_png}"
     )
+    if preconditions["violated"]:
+        summary += f" · failed_probes={preconditions['failed']}"
     if "per_beat" in metrics:
         pb = metrics["per_beat"]
         summary += (

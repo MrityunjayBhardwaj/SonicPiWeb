@@ -69,6 +69,28 @@ interface SidecarPerBeat {
   per_beat_png?: string;
 }
 
+interface PreconditionProbe {
+  ok: boolean;
+  skipped?: boolean;
+  skip_reason?: string;
+  // Probe-specific fields (one of):
+  desktop_hits?: number; web_hits?: number;
+  best_lag_ms?: number; tolerance_ms?: number;
+  desktop?: number; web?: number;
+  ratio?: number | null;
+  tolerance?: string;
+}
+
+interface SidecarPreconditions {
+  probes: {
+    onset_count: PreconditionProbe;
+    envelope_lag: PreconditionProbe;
+    energy_x_duration: PreconditionProbe;
+  };
+  violated: boolean;
+  failed: string[];
+}
+
 interface SidecarSpectrogram {
   l2_mel_db: number;
   mfcc_distance: number;
@@ -77,6 +99,7 @@ interface SidecarSpectrogram {
   desktop_peak_freq_hz?: number;
   web_peak_freq_hz?: number;
   per_beat?: SidecarPerBeat;
+  preconditions?: SidecarPreconditions;
 }
 
 interface Sidecar {
@@ -110,6 +133,7 @@ interface InspectorEntry extends BaselineEntry {
   webStats: AudioStats;
   perBeat: PerBeatRow[];
   mostDivergentBeats: number[];
+  preconditions: SidecarPreconditions | null;
   artifacts: {
     desktopWav: string | null;
     webWav: string | null;
@@ -243,6 +267,7 @@ function build(): void {
       webStats: stats?.web ?? emptyStats(),
       perBeat: pb?.rows ?? [],
       mostDivergentBeats: pb?.most_divergent_beats ?? [],
+      preconditions: sg?.preconditions ?? null,
       artifacts: {
         desktopWav: okDesktop ? `fx/${fx}/desktop.wav` : null,
         webWav: okWeb ? `fx/${fx}/web.wav` : null,
@@ -255,12 +280,32 @@ function build(): void {
     });
   }
 
+  const preconditionViolated = entries.filter((e) => e.preconditions?.violated).length;
+  const preconditionMissing = entries.filter((e) => e.preconditions == null).length;
+
   const out = {
     generatedAt: new Date().toISOString(),
     sourceBaseline: path.relative(REPO_ROOT, BASELINE_PATH),
     counts: tally(entries),
+    preconditionStats: {
+      violated: preconditionViolated,
+      missing: preconditionMissing,
+      total: entries.length,
+    },
     entries: sortEntries(entries),
   };
+
+  if (preconditionMissing > 0) {
+    console.log(
+      `[inspector] ${preconditionMissing}/${entries.length} entries lack precondition probes ` +
+      `(re-run spectrogram-compare on those WAV pairs to populate)`,
+    );
+  }
+  if (preconditionViolated > 0) {
+    console.log(
+      `[inspector] ${preconditionViolated}/${entries.length} entries have PRECONDITION-VIOLATED — score is uninterpretable for those`,
+    );
+  }
 
   fs.writeFileSync(OUT_BASELINE_PATH, JSON.stringify(out, null, 2));
   console.log(`[inspector] wrote ${OUT_BASELINE_PATH}`);
