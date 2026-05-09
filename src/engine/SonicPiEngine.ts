@@ -1410,6 +1410,23 @@ export class SonicPiEngine {
         const removedLoops = oldLoops.filter(name => !pendingLoops.has(name))
         const hasNewLoops = [...pendingLoops.keys()].some(name => !oldLoops.includes(name))
 
+        // Per-loop state cleanup for removed loops. Without this, if a loop is
+        // removed (e.g. user clears the buffer and Updates) and then re-added
+        // later, the stale state survives:
+        //   - loopSynced.has(name) → true → restored loop SKIPS waiting for
+        //     its `sync:` target → starts at registerLoop's getAudioTime()
+        //     instead of the next met1 cue → music drifts out of phase.
+        //   - loopTicks/loopBeats/loopSeeds → tick state resumes from where
+        //     it left off pre-removal → wrong notes from .tick/.shuffle/etc.
+        //   - loopBuilders → stale closure could be re-invoked from edge paths.
+        for (const name of removedLoops) {
+          this.loopBuilders.delete(name)
+          this.loopSeeds.delete(name)
+          this.loopTicks.delete(name)
+          this.loopBeats.delete(name)
+          this.loopSynced.delete(name)
+        }
+
         // Pause ticking so no old events fire during transition
         scheduler.pauseTick()
 
