@@ -31,6 +31,18 @@
 
 import { theme } from './theme'
 import { createLogo } from './Logo'
+import { track, EVENTS } from './Analytics'
+
+/** Bucket a duration into a small set of labels — keeps Plausible's prop
+ *  cardinality low (raw `ms` would be a unique value per session). */
+function bucketDurationMs(ms: number): string {
+  if (ms < 500) return '<500ms'
+  if (ms < 1000) return '500-1000ms'
+  if (ms < 2000) return '1-2s'
+  if (ms < 5000) return '2-5s'
+  if (ms < 10000) return '5-10s'
+  return '10s+'
+}
 
 interface PreloadStep {
   /** Visible label, 4 words or less. */
@@ -122,6 +134,8 @@ export class Preloader {
   }
 
   async run(steps: PreloadStep[]): Promise<void> {
+    const t0 = performance.now()
+    let failures = 0
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]
       this.status.textContent = step.label
@@ -132,12 +146,22 @@ export class Preloader {
         // will retry the same URL on first real use. Log and continue.
         // eslint-disable-next-line no-console
         console.warn(`[preloader] "${step.label}" failed to preload:`, err)
+        failures++
       }
       const pct = Math.round(((i + 1) / steps.length) * 100)
       this.bar.style.width = `${pct}%`
       this.percentLabel.textContent = `${pct}%`
     }
     this.status.textContent = 'Ready'
+    const elapsedMs = Math.round(performance.now() - t0)
+    // Real-world cold-start telemetry: how long the preloader actually
+    // took, and whether any CDN steps failed. Buckets the duration so
+    // the dashboard isn't a high-cardinality sea of unique numbers.
+    track(EVENTS.PreloaderComplete, {
+      ms: elapsedMs,
+      bucket: bucketDurationMs(elapsedMs),
+      failures,
+    })
     await new Promise((r) => setTimeout(r, 180))
     await this.fadeOut()
   }

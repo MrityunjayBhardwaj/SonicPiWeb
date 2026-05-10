@@ -5,6 +5,7 @@
 import { examples, getExamplesByDifficulty, type Example } from '../engine/examples'
 import { theme } from './theme'
 import { createLogo } from './Logo'
+import { track, EVENTS } from './Analytics'
 
 export interface MidiDeviceInfo {
   id: string
@@ -179,7 +180,12 @@ export class Toolbar {
     const isChromiumFamily = /Chrome\//.test(ua) && !/Firefox\//.test(ua)
     const midiBtn = this.iconButton(
       '\u{1F3B9}', 'MIDI',
-      () => isChromiumFamily ? this.toggleMidiDropdown(midiBtn) : undefined,
+      () => {
+        // Track every click — including the disabled-state click on
+        // non-Chromium so we can size how many users hit the limitation.
+        track(EVENTS.MidiOpened, { supported: isChromiumFamily ? 'chromium' : 'unsupported' })
+        if (isChromiumFamily) this.toggleMidiDropdown(midiBtn)
+      },
       { bg: theme.comment, hover: theme.fgMuted }
     )
     if (isChromiumFamily) {
@@ -189,7 +195,11 @@ export class Toolbar {
       midiBtn.title = 'MIDI is unsupported in this browser. Try Chrome, Edge, Brave, or Opera.'
       midiBtn.style.opacity = '0.35'
       midiBtn.style.cursor = 'not-allowed'
-      midiBtn.disabled = true
+      // Intentionally NOT setting `disabled = true` — a disabled button
+      // doesn't fire click events, and we want analytics on the
+      // unsupported-state click so we can size how often users hit it.
+      // The click handler short-circuits the dropdown when unsupported;
+      // visual cues (cursor, opacity) communicate the disabled state.
     }
     topRow.appendChild(midiBtn)
 

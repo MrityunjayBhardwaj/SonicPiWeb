@@ -161,7 +161,31 @@ We use the project board at <https://github.com/MrityunjayBhardwaj/SonicPi.js/pr
 
 ---
 
-## 11. What this beta IS for
+## 11. Privacy & analytics
+
+We use [Plausible](https://plausible.io/) for analytics. It's privacy-friendly: no cookies, no IP tracking, no PII, GDPR/CCPA-clean. We never send your source code or error messages to analytics.
+
+**What we track:**
+
+- Pageviews
+- `Run Code` — engagement (which browser)
+- `Engine Init Failed` — CDN / WASM reliability (browser + error class)
+- `Runtime Error` — error class only, never the message or your code
+- `Sample Preview` — feature adoption
+- `MIDI Opened` — including unsupported-browser clicks (sizes the limitation)
+- `Recording Saved` — feature adoption
+- `Example Loaded` — which built-in examples actually get tried (name only)
+- `Preloader Complete` — real-world cold-start performance buckets
+
+**To opt out:** open the browser console and run:
+```js
+localStorage.setItem('spw-disable-analytics', '1')
+```
+Refresh the tab. All `track(...)` calls become no-ops. To re-enable, delete the key.
+
+Source: [`src/app/Analytics.ts`](./src/app/Analytics.ts) — every event call site is grep-able.
+
+## 12. What this beta IS for
 
 - **Live coding in the browser** without installing anything. Open a tab, code, hear it.
 - **Sharing a piece via URL** — the editor encodes your buffer into the URL.

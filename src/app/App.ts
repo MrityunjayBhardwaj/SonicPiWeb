@@ -18,6 +18,7 @@ import { SampleBrowser } from './SampleBrowser'
 import { HelpPanel } from './HelpPanel'
 import { APP_VERSION } from './version'
 import { theme } from './theme'
+import { track, EVENTS, errorClass, detectBrowserFamily } from './Analytics'
 
 // Welcome buffer — the Blade Runner Ecstasy Edit
 const WELCOME_CODE = `# =====================================================
@@ -973,6 +974,8 @@ export class App {
         const fe = friendlyError(err)
         this.console.logError(fe.title, fe.message)
         if (fe.line) this.editor.highlightErrorLine(fe.line)
+        // Privacy: only the error class + browser. No message, no code.
+        track(EVENTS.RuntimeError, { error: errorClass(err), browser: detectBrowserFamily() })
       })
 
       this.engine.setPrintHandler((msg) => {
@@ -997,6 +1000,7 @@ export class App {
         this.console.logError('Engine init failed', String(initErr))
         this.toolbar.setLoading(false)
         this.engine = null
+        track(EVENTS.EngineInitFailed, { browser: detectBrowserFamily(), error: errorClass(initErr) })
         return false
       }
       // Apply saved volume from prefs
@@ -1071,6 +1075,7 @@ export class App {
       this.engine.play()
       this.playing = true
       this.toolbar.setPlaying(true)
+      track(EVENTS.RunCode, { browser: detectBrowserFamily() })
       await this.sessionLog.logRun(code)
 
       // Connect scope
@@ -1116,6 +1121,7 @@ export class App {
         try {
           await this.recorder.stopAndDownload()
           this.console.logSystem('  Recording saved!')
+          track(EVENTS.RecordingSaved)
         } catch (err) {
           this.console.logError('Recording failed', String(err))
         }
@@ -1145,6 +1151,9 @@ export class App {
     this.saveBuffers()
     this.sessionLog.logLoadExample(example.name, example.ruby)
     this.console.logSystem(`  Loaded: ${example.name} — ${example.description}`)
+    // Built-in example names are bounded (~18) — safe / useful as a prop:
+    // tells us which examples actually get tried.
+    track(EVENTS.ExampleLoaded, { name: example.name })
     // Always replay so the DSL `load_example "..."` works on first run.
     // The previous `if (this.playing)` guard raced with handlePlay setting
     // playing=true AFTER `await evaluate` returned — meaning the DSL handler
@@ -1362,6 +1371,7 @@ export class App {
         this.playing = true
         this.toolbar.setPlaying(true)
       }
+      track(EVENTS.SamplePreview)
     } catch (err) {
       this.console.logError('Preview failed', String(err))
     }
