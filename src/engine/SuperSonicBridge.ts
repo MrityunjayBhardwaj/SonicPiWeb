@@ -129,7 +129,11 @@ export class SuperSonicBridge {
   private pendingSampleLoads = new Map<string, Promise<number>>()
   /** Sample duration cache — populated asynchronously on first load via Web Audio decode. */
   private sampleDurations = new Map<string, number>()
-  private resolvedSampleBaseURL = 'https://unpkg.com/supersonic-scsynth-samples@latest/samples/'
+  // Pinned to @0.57.0 to match the runtime SuperSonic version (SV22:
+  // CDN packages must pin together). The init() override at line 213
+  // sets this from options or to the same pinned URL — this default
+  // only matters before init() runs.
+  private resolvedSampleBaseURL = 'https://unpkg.com/supersonic-scsynth-samples@0.57.0/samples/'
   private nextBufNum = 0
   private analyserNode: AnalyserNode | null = null
   private analyserL: AnalyserNode | null = null
