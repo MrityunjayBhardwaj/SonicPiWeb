@@ -10,9 +10,19 @@ import { getCategories, getSamplesByCategory, searchSamples, type SampleInfo } f
 import { theme } from './theme'
 
 export interface SampleBrowserCallbacks {
-  onPreviewSample: (name: string) => void
+  onPreviewSample: (name: string) => Promise<void> | void
+  onStopPreview: () => void
   onInsertText: (text: string) => void
 }
+
+const PLAY_GLYPH = '▶'
+const PAUSE_GLYPH = '⏸'
+// Preview plays the sample 5 times in App.previewSample. Most one-shot
+// samples are 0.05s–6s (5× = ≤30s); :loop_* and :ambi_* run 8–25s each
+// (5× = ≤125s). We don't have per-sample durations on the JS side, so use
+// a conservative cap that covers the long-tail. The timer is purely a UI
+// revert; clicking Pause cuts the audio earlier and resets the button.
+const PREVIEW_AUTO_REVERT_MS = 60000
 
 export class SampleBrowser {
   private overlay: HTMLElement | null = null
@@ -22,9 +32,20 @@ export class SampleBrowser {
   private categoryListEl: HTMLElement | null = null
   private sampleListEl: HTMLElement | null = null
   private escHandler: ((e: KeyboardEvent) => void) | null = null
+  /** Currently-playing preview row state. Only one preview at a time. */
+  private currentPreview: { btn: HTMLButtonElement; name: string; timerId: number } | null = null
 
   constructor(callbacks: SampleBrowserCallbacks) {
     this.callbacks = callbacks
+  }
+
+  private resetPreview(): void {
+    if (!this.currentPreview) return
+    clearTimeout(this.currentPreview.timerId)
+    const { btn } = this.currentPreview
+    btn.textContent = PLAY_GLYPH
+    btn.title = 'Preview sample'
+    this.currentPreview = null
   }
 
   open(): void {
@@ -199,6 +220,10 @@ export class SampleBrowser {
     }
     this.categoryListEl = null
     this.sampleListEl = null
+    if (this.currentPreview) {
+      this.callbacks.onStopPreview()
+      this.resetPreview()
+    }
   }
 
   get isOpen(): boolean {
@@ -311,9 +336,9 @@ export class SampleBrowser {
       row.style.background = 'transparent'
     })
 
-    // Preview button
+    // Preview button \u2014 toggles between play (\u25B6) and pause (\u23F8).
     const previewBtn = document.createElement('button')
-    previewBtn.textContent = '\u25B6'
+    previewBtn.textContent = PLAY_GLYPH
     previewBtn.title = 'Preview sample'
     previewBtn.style.cssText = `
       background: none;
@@ -337,9 +362,41 @@ export class SampleBrowser {
       previewBtn.style.borderColor = theme.borderHover
       previewBtn.style.color = theme.fgMuted
     })
-    previewBtn.addEventListener('click', (e) => {
+    previewBtn.addEventListener('click', async (e) => {
       e.stopPropagation()
-      this.callbacks.onPreviewSample(sample.name)
+      // Click on the currently-playing button \u2192 pause + revert.
+      if (this.currentPreview && this.currentPreview.btn === previewBtn) {
+        this.callbacks.onStopPreview()
+        this.resetPreview()
+        return
+      }
+      // Click on a different row \u2192 stop the previous preview and reset its
+      // button before starting the new one. Engine state is replaced anyway
+      // by the next evaluate(); explicit stop keeps the UI honest.
+      if (this.currentPreview) {
+        this.callbacks.onStopPreview()
+        this.resetPreview()
+      }
+      // Mark this row as playing optimistically; the await may take a beat
+      // for the engine cold-start path.
+      previewBtn.textContent = PAUSE_GLYPH
+      previewBtn.title = 'Stop preview'
+      const timerId = window.setTimeout(() => {
+        // Auto-revert after the conservative cap. If the user stopped sooner,
+        // currentPreview is already null and resetPreview is a no-op.
+        if (this.currentPreview && this.currentPreview.btn === previewBtn) {
+          this.resetPreview()
+        }
+      }, PREVIEW_AUTO_REVERT_MS)
+      this.currentPreview = { btn: previewBtn, name: sample.name, timerId }
+      try {
+        await this.callbacks.onPreviewSample(sample.name)
+      } catch {
+        // Preview failed (e.g. engine init error). Revert the button.
+        if (this.currentPreview && this.currentPreview.btn === previewBtn) {
+          this.resetPreview()
+        }
+      }
     })
     row.appendChild(previewBtn)
 

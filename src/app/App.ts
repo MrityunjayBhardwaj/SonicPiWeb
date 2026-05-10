@@ -936,104 +936,124 @@ export class App {
     if (title) title.textContent = `Buffer ${index}`
   }
 
+  /**
+   * Initialise the audio engine if not already initialised. Idempotent.
+   * Used both by handlePlay (which then evaluates the editor buffer) and by
+   * the sample-browser preview, which wants engine without disturbing the
+   * editor buffer's run state.
+   */
+  private async ensureEngineInitialised(): Promise<boolean> {
+    if (this.engine) return true
+    try {
+      this.toolbar.setLoading(true)
+      const t0 = performance.now()
+      this.console.logSystem('  Initialising audio engine...')
+
+      let SuperSonicClass: unknown = undefined
+      try {
+        this.console.logSystem('  Loading SuperSonic WASM runtime...')
+        // CDN dependency. dynamic import() does not support SRI.
+        // See src/engine/cdn-manifest.ts for the full dependency manifest.
+        // @ts-ignore — CDN URL
+        const mod = await import(/* @vite-ignore */ 'https://unpkg.com/supersonic-scsynth@0.57.0')
+        SuperSonicClass = mod.SuperSonic ?? mod.default
+        this.console.logSystem('  WASM runtime loaded.')
+      } catch {
+        this.console.logSystem('  SuperSonic CDN unavailable.')
+        this.console.logSystem('  Running without audio (events will still log).')
+      }
+
+      const savedPrefs = this.getPrefs()
+      this.engine = new SonicPiEngine({
+        bridge: SuperSonicClass ? { SuperSonicClass: SuperSonicClass as never } : {},
+        schedAheadTime: typeof savedPrefs.schedAheadTime === 'number' ? savedPrefs.schedAheadTime as number : undefined,
+      })
+
+      this.engine.setRuntimeErrorHandler((err) => {
+        const fe = friendlyError(err)
+        this.console.logError(fe.title, fe.message)
+        if (fe.line) this.editor.highlightErrorLine(fe.line)
+      })
+
+      this.engine.setPrintHandler((msg) => {
+        this.console.log(msg, 'info')
+      })
+
+      this.engine.setCueHandler((name, time) => {
+        this.cueLog.logCue(name, this.cueLog.currentRun, time * 1000)
+      })
+
+      this.engine.setLoadExampleHandler((example) => {
+        // Forward `load_example :name` calls in user code to the editor's
+        // existing load-example flow (#236). Replaces buffer + auto-runs
+        // when already playing — same shape as the dropdown selection.
+        void this.loadExample(example)
+      })
+
+      this.console.logSystem('  Loading synthdefs + initialising scsynth...')
+      try {
+        await this.engine.init()
+      } catch (initErr) {
+        this.console.logError('Engine init failed', String(initErr))
+        this.toolbar.setLoading(false)
+        this.engine = null
+        return false
+      }
+      // Apply saved volume from prefs
+      if (typeof savedPrefs.masterVolume === 'number') {
+        this.engine.setVolume((savedPrefs.masterVolume as number) / 100)
+      }
+      // Apply saved mixer params (calls /n_set on the live mixer node).
+      // Order matters: pre_amp first so its baseline is in place before
+      // setVolume's pre_amp recompute reads it (setVolume above already
+      // ran but the bridge's own field default matched, so no-op).
+      if (typeof savedPrefs.mixerPreAmp === 'number') {
+        this.engine.setMixerPreAmp(savedPrefs.mixerPreAmp as number)
+      }
+      if (typeof savedPrefs.mixerAmp === 'number') {
+        this.engine.setMixerAmp(savedPrefs.mixerAmp as number)
+      }
+      await this.sessionLog.initSigning()
+      // Expose engine for diagnostics (thread monitor, metrics)
+      ;(globalThis as Record<string, unknown>).__spw_engine = this.engine
+
+      // Log audio latency info (#6)
+      const audioInfo = this.engine.components.audio
+      if (audioInfo?.audioCtx) {
+        const ctx = audioInfo.audioCtx as AudioContext & { baseLatency?: number; outputLatency?: number }
+        const base = (ctx.baseLatency ?? 0) * 1000
+        const output = (ctx.outputLatency ?? 0) * 1000
+        this.console.logSystem(`  Audio latency: ${base.toFixed(1)}ms base + ${output.toFixed(1)}ms output = ${(base + output).toFixed(1)}ms`)
+      }
+
+      // Wire custom sample uploader to the engine and load samples from IndexedDB
+      if (this.menuBar) {
+        this.menuBar.sampleUploader.setEngine(this.engine)
+      }
+      const customCount = await this.engine.loadCustomSamplesFromDB()
+      if (customCount > 0) {
+        this.console.logSystem(`  Loaded ${customCount} custom sample${customCount > 1 ? 's' : ''} from storage.`)
+      }
+
+      const elapsed = ((performance.now() - t0) / 1000).toFixed(1)
+      this.toolbar.setLoading(false)
+      this.console.logSystem(`  Audio engine ready. (${elapsed}s)`)
+      this.console.logSystem('  Session logging active. Ctrl+Shift+S to export.')
+      this.console.logSystem('')
+      return true
+    } catch (err) {
+      this.toolbar.setLoading(false)
+      const error = err instanceof Error ? err : new Error(String(err))
+      const fe = friendlyError(error)
+      this.console.logError(fe.title, fe.message)
+      return false
+    }
+  }
+
   private async handlePlay(): Promise<void> {
     try {
-      if (!this.engine) {
-        this.toolbar.setLoading(true)
-        const t0 = performance.now()
-        this.console.logSystem('  Initialising audio engine...')
-
-        let SuperSonicClass: unknown = undefined
-        try {
-          this.console.logSystem('  Loading SuperSonic WASM runtime...')
-          // CDN dependency. dynamic import() does not support SRI.
-          // See src/engine/cdn-manifest.ts for the full dependency manifest.
-          // @ts-ignore — CDN URL
-          const mod = await import(/* @vite-ignore */ 'https://unpkg.com/supersonic-scsynth@0.57.0')
-          SuperSonicClass = mod.SuperSonic ?? mod.default
-          this.console.logSystem('  WASM runtime loaded.')
-        } catch {
-          this.console.logSystem('  SuperSonic CDN unavailable.')
-          this.console.logSystem('  Running without audio (events will still log).')
-        }
-
-        const savedPrefs = this.getPrefs()
-        this.engine = new SonicPiEngine({
-          bridge: SuperSonicClass ? { SuperSonicClass: SuperSonicClass as never } : {},
-          schedAheadTime: typeof savedPrefs.schedAheadTime === 'number' ? savedPrefs.schedAheadTime as number : undefined,
-        })
-
-        this.engine.setRuntimeErrorHandler((err) => {
-          const fe = friendlyError(err)
-          this.console.logError(fe.title, fe.message)
-          if (fe.line) this.editor.highlightErrorLine(fe.line)
-        })
-
-        this.engine.setPrintHandler((msg) => {
-          this.console.log(msg, 'info')
-        })
-
-        this.engine.setCueHandler((name, time) => {
-          this.cueLog.logCue(name, this.cueLog.currentRun, time * 1000)
-        })
-
-        this.engine.setLoadExampleHandler((example) => {
-          // Forward `load_example :name` calls in user code to the editor's
-          // existing load-example flow (#236). Replaces buffer + auto-runs
-          // when already playing — same shape as the dropdown selection.
-          void this.loadExample(example)
-        })
-
-        this.console.logSystem('  Loading synthdefs + initialising scsynth...')
-        try {
-          await this.engine.init()
-        } catch (initErr) {
-          this.console.logError('Engine init failed', String(initErr))
-          this.toolbar.setLoading(false)
-          return
-        }
-        // Apply saved volume from prefs
-        if (typeof savedPrefs.masterVolume === 'number') {
-          this.engine.setVolume((savedPrefs.masterVolume as number) / 100)
-        }
-        // Apply saved mixer params (calls /n_set on the live mixer node).
-        // Order matters: pre_amp first so its baseline is in place before
-        // setVolume's pre_amp recompute reads it (setVolume above already
-        // ran but the bridge's own field default matched, so no-op).
-        if (typeof savedPrefs.mixerPreAmp === 'number') {
-          this.engine.setMixerPreAmp(savedPrefs.mixerPreAmp as number)
-        }
-        if (typeof savedPrefs.mixerAmp === 'number') {
-          this.engine.setMixerAmp(savedPrefs.mixerAmp as number)
-        }
-        await this.sessionLog.initSigning()
-        // Expose engine for diagnostics (thread monitor, metrics)
-        ;(globalThis as Record<string, unknown>).__spw_engine = this.engine
-
-        // Log audio latency info (#6)
-        const audioInfo = this.engine.components.audio
-        if (audioInfo?.audioCtx) {
-          const ctx = audioInfo.audioCtx as AudioContext & { baseLatency?: number; outputLatency?: number }
-          const base = (ctx.baseLatency ?? 0) * 1000
-          const output = (ctx.outputLatency ?? 0) * 1000
-          this.console.logSystem(`  Audio latency: ${base.toFixed(1)}ms base + ${output.toFixed(1)}ms output = ${(base + output).toFixed(1)}ms`)
-        }
-
-        // Wire custom sample uploader to the engine and load samples from IndexedDB
-        if (this.menuBar) {
-          this.menuBar.sampleUploader.setEngine(this.engine)
-        }
-        const customCount = await this.engine.loadCustomSamplesFromDB()
-        if (customCount > 0) {
-          this.console.logSystem(`  Loaded ${customCount} custom sample${customCount > 1 ? 's' : ''} from storage.`)
-        }
-
-        const elapsed = ((performance.now() - t0) / 1000).toFixed(1)
-        this.toolbar.setLoading(false)
-        this.console.logSystem(`  Audio engine ready. (${elapsed}s)`)
-        this.console.logSystem('  Session logging active. Ctrl+Shift+S to export.')
-        this.console.logSystem('')
-      }
+      const ready = await this.ensureEngineInitialised()
+      if (!ready || !this.engine) return
 
       const code = this.editor.getValue()
       this.console.newRun()
@@ -1242,14 +1262,21 @@ export class App {
   // MIDI device management
   // ---------------------------------------------------------------------------
 
-  private getMidiDevices(): MidiDeviceInfo[] {
-    if (!this.engine) return []
-    // Lazy-init MIDI on first dropdown open
+  private async getMidiDevices(): Promise<MidiDeviceInfo[]> {
+    // The MidiBridge is owned by the engine, so the engine must exist first.
+    // Auto-init matches the sample-preview UX — the user shouldn't have to
+    // hit Run before being allowed to enumerate MIDI devices.
+    const ready = await this.ensureEngineInitialised()
+    if (!ready || !this.engine) return []
+    // Lazy-init on first dropdown open. Await the init() promise so the
+    // caller (Toolbar) sees a fully-enumerated list on the first call —
+    // not an empty array that requires a second open to populate.
+    // Firefox especially: requestMIDIAccess() shows a permission prompt
+    // here; awaiting means we render only after the user has decided.
     if (!this.midiInitialized) {
-      this.engine.midiBridge.init().then((ok) => {
-        this.midiInitialized = ok
-      })
-      return [] // will populate on next open
+      const ok = await this.engine.midiBridge.init()
+      this.midiInitialized = ok
+      if (!ok) return []
     }
     const devices = this.engine.midiBridge.getDevices()
     return devices.map(d => ({
@@ -1295,6 +1322,7 @@ export class App {
     }
     this.sampleBrowser = new SampleBrowser({
       onPreviewSample: (name) => this.previewSample(name),
+      onStopPreview: () => this.stopPreview(),
       onInsertText: (text) => {
         this.editor.insertAtCursor(text)
       },
@@ -1304,19 +1332,32 @@ export class App {
 
   private async previewSample(name: string): Promise<void> {
     try {
-      if (!this.engine) {
-        this.console.logSystem('  Start the engine first to preview samples.')
-        return
-      }
-      // Evaluate a one-shot sample play
-      const code = `sample :${name}`
+      const ready = await this.ensureEngineInitialised()
+      if (!ready || !this.engine) return
+
+      // SP80 (commit 57241c6) short-circuits evaluate() when the source code
+      // is byte-identical to the prior run — designed for "no-op Update" but
+      // it also turns the second click of the same preview button into a
+      // silent no-op. The unique marker comment makes every preview a fresh
+      // distinct string.
+      // The 5x repeat is a UX choice — users want to audition the loop /
+      // groove of a sample, not just hear it once. sample_duration falls back
+      // to 1s if scsynth hasn't reported the buffer length yet (cold-start).
+      const code = [
+        `# preview_${Date.now()}`,
+        `5.times do`,
+        `  sample :${name}`,
+        `  d = sample_duration(:${name})`,
+        `  sleep (d > 0 ? d : 1)`,
+        `end`,
+      ].join('\n')
       const result = await this.engine.evaluate(code)
       if (result.error) {
         this.console.logError('Preview failed', result.error.message)
         return
       }
       this.engine.play()
-      // If not already playing, mark as playing so stop works
+      // Mark as playing so subsequent Stop is wired correctly.
       if (!this.playing) {
         this.playing = true
         this.toolbar.setPlaying(true)
@@ -1324,6 +1365,12 @@ export class App {
     } catch (err) {
       this.console.logError('Preview failed', String(err))
     }
+  }
+
+  private stopPreview(): void {
+    // Sample-browser pause click. Reuse handleStop so the toolbar/scope state
+    // stays in sync with engine state.
+    if (this.engine && this.playing) this.handleStop()
   }
 
   dispose(): void {
