@@ -327,15 +327,17 @@ export class Toolbar {
   setPlaying(playing: boolean): void {
     this.playing = playing
     this.playBtn.style.background = '#FF1493'
+    // Label stays "Run" always — matches Desktop Sonic Pi. Re-clicking Run
+    // while playing hot-swaps live_loops (engine.evaluate handles it).
     const label = this.playBtn.querySelector('.spw-btn-label') as HTMLElement
-    if (label) label.textContent = playing ? 'Update' : 'Run'
+    if (label) label.textContent = 'Run'
     this.stopBtn.style.opacity = playing ? '1' : '0.4'
     if (!playing) this.setRecording(false)
   }
 
   setLoading(loading: boolean): void {
     const label = this.playBtn.querySelector('.spw-btn-label') as HTMLElement
-    if (label) label.textContent = loading ? 'Loading...' : (this.playing ? 'Update' : 'Run')
+    if (label) label.textContent = loading ? 'Loading...' : 'Run'
     this.playBtn.style.opacity = loading ? '0.6' : '1'
   }
 

@@ -640,10 +640,9 @@ export class Editor {
     // Keybindings
     try {
       const runKeymap = cm.keymap.of([
-        { key: 'Mod-Enter', run: () => { this.onRunCallback?.(); return true } },
-        { key: 'Alt-r', run: () => { this.onRunCallback?.(); return true } },
+        // Run is wired at the document level in App.ts so it works regardless
+        // of which panel has focus. No Run binding here on purpose.
         { key: 'Escape', run: () => { this.onStopCallback?.(); return true } },
-        { key: 'Alt-s', run: () => { this.onStopCallback?.(); return true } },
         { key: 'F11', run: () => { this.onZenCallback?.(); return true } },
         {
           key: 'Mod-/',

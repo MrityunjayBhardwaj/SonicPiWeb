@@ -917,6 +917,13 @@ export class App {
         e.preventDefault()
         this.exportSession()
       }
+      // Run on Ctrl/Cmd+Enter — document-level so it fires regardless of which
+      // panel has focus (CodeMirror's own keymap only fires when the editor is
+      // focused, which breaks when the user clicks into the console / scope).
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault()
+        this.handlePlay()
+      }
     })
   }
 
