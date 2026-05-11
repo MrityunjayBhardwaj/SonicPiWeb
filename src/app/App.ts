@@ -439,8 +439,8 @@ export class App {
   private getPrefs(): Record<string, number | boolean> {
     return {
       masterVolume: 80,
-      mixerPreAmp: 0.32,
-      mixerAmp: 2,
+      mixerPreAmp: 0.3,
+      mixerAmp: 0.8,
       scopeLineWidth: 2,
       scopeGlow: 4,
       scopeTrail: 25,

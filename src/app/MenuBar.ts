@@ -719,8 +719,8 @@ export class MenuBar {
     // --- Audio ---
     addSection('Audio')
     addSlider('Master Volume', 'masterVolume', 0, 100, 1, 80, '%')
-    addSlider('Mixer Pre-Amp', 'mixerPreAmp', 0.1, 1.0, 0.01, 0.32)
-    addSlider('Mixer Amp', 'mixerAmp', 0.5, 3.0, 0.1, 2.0)
+    addSlider('Mixer Pre-Amp', 'mixerPreAmp', 0.1, 1.0, 0.01, 0.3)
+    addSlider('Mixer Amp', 'mixerAmp', 0.5, 3.0, 0.1, 0.8)
 
     // --- Visuals ---
     addSection('Visuals')

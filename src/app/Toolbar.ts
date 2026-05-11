@@ -201,7 +201,11 @@ export class Toolbar {
       // The click handler short-circuits the dropdown when unsupported;
       // visual cues (cursor, opacity) communicate the disabled state.
     }
-    topRow.appendChild(midiBtn)
+    // MIDI button hidden until Tier D ships (midi_pc, midi_raw, midi_sysex,
+    // current_midi_*, device picker UI). Construction kept above so analytics
+    // wiring and dropdown method survive; re-enable by uncommenting below.
+    // topRow.appendChild(midiBtn)
+    void midiBtn
 
     // Samples button
     const samplesBtn = this.iconButton(

@@ -14,4 +14,4 @@
  * Report Bug button, and have no way to tell which engine version they
  * were running. Without this, every bug report starts with "which version?"
  */
-export const APP_VERSION = '1.5.0-beta.2'
+export const APP_VERSION = '1.5.0-beta.3'
