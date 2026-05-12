@@ -535,6 +535,31 @@ export class SuperSonicBridge {
     this.messageQueue.length = 0
   }
 
+  /**
+   * Eagerly load multiple FX synthdef binaries in parallel. Called from
+   * engine.init() to warm the synthdef cache before any FX is used —
+   * eliminates the first-use fetch latency that would otherwise add ~50-200ms
+   * to the first /s_new for a previously-unseen FX (SP5 trap). Idempotent and
+   * safe to call multiple times; ensureSynthDefLoaded de-dupes via
+   * loadedSynthDefs + pendingSynthDefLoads.
+   *
+   * Pass FX names WITHOUT the `sonic-pi-fx_` prefix (e.g. 'reverb', 'echo') —
+   * the prefix is added internally to match ensureSynthDefLoaded's contract.
+   *
+   * Failures are swallowed (per-name) so one missing synthdef doesn't block
+   * the rest. Missing FX surface at /s_new dispatch time as before (SP5).
+   */
+  async preloadFxSynthDefs(names: readonly string[]): Promise<void> {
+    if (!this.sonic) return
+    await Promise.all(
+      names.map(n =>
+        this.ensureSynthDefLoaded(`sonic-pi-fx_${n}`).catch(() => {
+          /* CDN miss for this FX — surface at /s_new time per SP5 */
+        })
+      )
+    )
+  }
+
   private ensureSynthDefLoaded(name: string): Promise<void> {
     const fullName = name.startsWith('sonic-pi-') ? name : `sonic-pi-${name}`
     if (this.loadedSynthDefs.has(fullName)) return Promise.resolve()
