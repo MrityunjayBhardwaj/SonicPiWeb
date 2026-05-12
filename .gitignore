@@ -43,6 +43,7 @@ playwright-report/
 
 # Browser diagnostic captures (internal observation tool)
 .captures/
+tmp/
 
 # Personal learnings (not part of the project)
 LEARNINGS.md
