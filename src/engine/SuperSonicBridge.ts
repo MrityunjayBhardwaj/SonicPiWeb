@@ -1173,6 +1173,29 @@ export class SuperSonicBridge {
     this.clearLoopMonitors()            // return loopBuses to pool + clear map
   }
 
+  /**
+   * Drain future-scheduled bundles from the WASM scheduler queue WITHOUT
+   * killing currently-rendering synths.
+   *
+   * Use case: hot-swap (#296). Each iteration of a live_loop batches its
+   * /s_new bundles per SV9 and ships them with future timetags spanning the
+   * iteration. On hot-swap, those queued bundles belong to the OLD body; if
+   * left alone, they fire on top of the new body's bundles, audibly stacking
+   * samples on rapid changed-code re-runs. /g_freeAll would also kill
+   * already-rendering envelopes (the click-on-Run), so this separates the
+   * two concerns: cancel queued plans, preserve rendered audio.
+   *
+   * Bundles that have ALREADY been processed by scsynth (synth node spawned,
+   * currently rendering) are NOT affected — those live in group 100 and
+   * decay naturally per their envelopes. This matches Desktop SP behavior,
+   * where Kernel.sleep blocks the Ruby thread so no future bundles are ever
+   * queued in the first place.
+   */
+  purgePendingBundles(): void {
+    if (!this.sonic) return
+    this.sonic.purge().catch(() => {})
+  }
+
   /** Create a new group inside the FX group (101). Returns group ID. */
   createFxGroup(): number {
     if (!this.sonic) throw new Error('SuperSonic not initialized')

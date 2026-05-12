@@ -1458,6 +1458,20 @@ export class SonicPiEngine {
         //      lifecycle. SP82 + SP85 hygiene (cancel timer, free group, free
         //      bus) still applies here.
         if (this.bridge) {
+          // (0) Purge future-scheduled bundles from the WASM scheduler queue
+          //     WITHOUT touching already-rendering synths. Each iteration
+          //     batches /s_news with future timetags spanning the schedAhead
+          //     window (SV9). Bundles for the OLD body's NEXT iterations are
+          //     in this queue; if we don't cancel them they fire on top of
+          //     the new body's audio, audibly stacking samples on rapid
+          //     changed-code re-runs (verified via tools/test-rerun-rapid-
+          //     changed.ts — pre-purge snare onsets 18→200 across 10 cycles).
+          //     Already-rendering synth nodes in group 100 are NOT in this
+          //     queue — they live in scsynth's running-node graph and decay
+          //     per their envelopes. This separation is the desktop-SP
+          //     analog: their Kernel.sleep blocks so no future bundles exist
+          //     to begin with; our schedAhead queue needs explicit drain.
+          this.bridge.purgePendingBundles()
           // (1) Persistent FX scopes: free only those whose scopeId does NOT
           //     appear in the new program. fxScopeChains was rebuilt during
           //     sandbox.execute above; persistentFx still holds the prior
