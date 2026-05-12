@@ -1461,6 +1461,55 @@ export class SonicPiEngine {
           this.reusableFx.clear()
         }
 
+        // Synchronous FX pre-creation — fixes issue #290 residual.
+        //
+        // Why this exists: the lazy creation at line 612 runs INSIDE the
+        // loop's first post-swap iteration, AT virtualTime + schedAheadTime.
+        // The same iteration then queues sample /s_new with the same timetag.
+        // scsynth receives both bundles and processes them in the order they
+        // arrive at its scheduler — a sub-frame race. When the race loses,
+        // sample /s_new fires onto a bus whose FX node hasn't been created
+        // yet → silent / dry clap for 1-2s post-Update (the user-reported
+        // "track plays wrongly" residual that survived the killTimer fix).
+        //
+        // Why this fixes it: FX nodes are CREATED HERE with audioTime=0
+        // (immediate). scsynth processes them now, BEFORE the loops resume
+        // and start queuing future-timed samples. By the time the first
+        // post-swap iteration fires, persistentFx is already populated, the
+        // lazy-creation block at line 612 is skipped via `persistentFx.has`,
+        // and task.outBus is set to the live FX bus before any sample plays.
+        //
+        // Why only FX (not samples): FX are bus receivers — they must exist
+        // before audio flows through them. Samples are continuous per-
+        // iteration events scheduled via virtual time; pre-creating them
+        // would block real-time scheduling. FX setup is one-time per scope.
+        if (this.bridge && isReEvaluate) {
+          for (const [scopeId, fxChain] of this.fxScopeChains) {
+            if (!fxChain || fxChain.length === 0) continue
+            if (this.persistentFx.has(scopeId)) continue
+            let currentOutBus = 0  // FX-wrapped loops route to master through chain
+            const buses: number[] = []
+            const groups: number[] = []
+            for (const fx of fxChain) {
+              const bus = this.bridge.allocateBus()
+              const groupId = this.bridge.createFxGroup()
+              const fxWarn = this.printHandler
+                ? (m: string) => this.printHandler!(`[Warning] with_fx :${fx.name} — ${m}`)
+                : undefined
+              const fxOpts = normalizeFxParams(fx.name, fx.opts, defaultBpm, fxWarn)
+              // audioTime=0 → scsynth processes immediately (before any
+              // future-timed sample bundles can race past). Awaiting the
+              // promise ensures synthdef load completes before the next FX.
+              await this.bridge.applyFx(fx.name, 0, fxOpts, bus, currentOutBus)
+              this.bridge.flushMessages(0)
+              buses.push(bus)
+              groups.push(groupId)
+              currentOutBus = bus
+            }
+            this.persistentFx.set(scopeId, { buses, groups, outBus: currentOutBus })
+          }
+        }
+
         // Commit: hot-swap same-named, stop removed, start new
         scheduler.reEvaluate(pendingLoops, { bpm: defaultBpm, synth: defaultSynth })
 
