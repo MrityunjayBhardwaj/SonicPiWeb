@@ -73,6 +73,22 @@ export interface SleepEntry {
   order: number
 }
 
+/**
+ * Pending one-shot callback bound to audio time (SV41).
+ *
+ * Used by AudioInterpreter's reusableFx kill_delay — virtual-time-scheduled
+ * kill so cancellation by next-iteration reuse is independent of real-time
+ * iter pacing (SP87). Fired at `audioTime <= getAudioTime()` (no schedAhead),
+ * which is one schedAhead behind sleep entries — this guarantees that when
+ * an iter resumes via tick() and cancels its kill in its microtask, the
+ * cancellation lands before the corresponding kill horizon is checked.
+ */
+interface PendingCallback {
+  audioTime: number
+  cb: () => void
+  cancelled: boolean
+}
+
 export interface TaskState {
   id: string
   virtualTime: number
@@ -159,6 +175,8 @@ export class VirtualTimeScheduler {
     taskId: string
     resolve: (payload: SyncPayload) => void
   }>>()
+  /** One-shot audio-time-bound callbacks (SV41 — backs scheduleAtVirtualTime). */
+  private pendingCallbacks: PendingCallback[] = []
 
   constructor(options: SchedulerOptions = {}) {
     this.getAudioTime = options.getAudioTime ?? (() => 0)
@@ -319,6 +337,30 @@ export class VirtualTimeScheduler {
     })
   }
 
+  /**
+   * Schedule a one-shot callback to fire when audio time reaches `audioTime` (SV41).
+   *
+   * Distinct from `scheduleSleep`:
+   * - sleep entries fire at `audioTime + schedAhead >= entry.time` (lookahead horizon)
+   * - pending callbacks fire at `audioTime >= entry.audioTime` (no lookahead)
+   *
+   * The schedAhead-stripped horizon is intentional: it gives a task that resumed
+   * from a sleep firing in the same tick (lookahead horizon) time to drain its
+   * microtask queue and call `.cancel()` before the corresponding callback's
+   * horizon is checked. Used by `AudioInterpreter.reusableFx` to schedule
+   * inner-FX kill_delay in virtual time instead of real-time setTimeout
+   * (SP87, SV41 — iter pacing in real time is unstable post SV40 purge).
+   *
+   * Returns `{ cancel }` — call it to prevent the callback from firing.
+   */
+  scheduleAtVirtualTime(audioTime: number, cb: () => void): { cancel: () => void } {
+    const entry: PendingCallback = { audioTime, cb, cancelled: false }
+    this.pendingCallbacks.push(entry)
+    return {
+      cancel: () => { entry.cancelled = true },
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Event dispatch
   // ---------------------------------------------------------------------------
@@ -427,6 +469,40 @@ export class VirtualTimeScheduler {
       const entry = this.queue.pop()!
       entry.resolve()
     }
+
+    // SV41: fire/cleanup pending audio-time-bound callbacks AFTER sleep entries.
+    // Horizon is `target - schedAhead` (the underlying audio time), so any task
+    // resumed from the sleep heap above has a chance to drain its microtask
+    // queue and cancel its kill before the kill's horizon is reached.
+    //
+    // CRITICAL: fired callbacks are deferred via `queueMicrotask`. Sleep entries
+    // resolved above queued their await-resumption microtasks FIRST; deferring
+    // the kill fire ensures an iter that resumes from sleep and synchronously
+    // cancels its kill in a with_fx reuse-check lands BEFORE the kill wrapper
+    // checks `cancelled`. Without the deferral, kill fires synchronously inside
+    // tick() (before any microtask drain), so when the same tick resolves both
+    // iter N+1's sleep and the kill horizon, the kill executes before iter N+1
+    // can call .cancel() — and the FX is wrongly freed (SP87).
+    if (this.pendingCallbacks.length > 0) {
+      const cbHorizon = target - this.schedAheadTime
+      let writeIdx = 0
+      for (let i = 0; i < this.pendingCallbacks.length; i++) {
+        const pc = this.pendingCallbacks[i]
+        if (pc.cancelled) continue // drop cancelled
+        if (pc.audioTime <= cbHorizon) {
+          const fired = pc
+          queueMicrotask(() => {
+            if (fired.cancelled) return
+            try { fired.cb() } catch (err) {
+              if (this.loopErrorHandler) this.loopErrorHandler('__pendingCallback__', err as Error)
+            }
+          })
+          continue // drop fired (queued)
+        }
+        this.pendingCallbacks[writeIdx++] = pc
+      }
+      this.pendingCallbacks.length = writeIdx
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -476,6 +552,7 @@ export class VirtualTimeScheduler {
     this.eventHandlers.length = 0
     this.cueMap.clear()
     this.syncWaiters.clear()
+    this.pendingCallbacks.length = 0
   }
 
   // ---------------------------------------------------------------------------

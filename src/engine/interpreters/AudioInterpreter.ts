@@ -25,8 +25,14 @@ interface ReusableFxState {
   groupId: number
   nodeId: number
   outBus: number
-  /** Pending kill_delay timer — cancelled if FX is reused before it fires. */
-  killTimer?: ReturnType<typeof setTimeout>
+  /**
+   * Pending kill_delay handle — cancelled if FX is reused before it fires (SV41).
+   * Backed by `scheduler.scheduleAtVirtualTime` (audio-time scheduled) instead
+   * of `setTimeout` (real-time scheduled) so cancellation is independent of
+   * real-time iter pacing (SP87 — post-purge real-time-paced iterations broke
+   * the setTimeout-based reuse logic).
+   */
+  killTimer?: { cancel: () => void }
 }
 
 export interface AudioContext {
@@ -269,7 +275,7 @@ export async function runProgram(
         if (existing) {
           // Reuse — cancel pending kill timer, route through existing FX bus
           if (existing.killTimer) {
-            clearTimeout(existing.killTimer)
+            existing.killTimer.cancel()
             existing.killTimer = undefined
           }
           if (step.nodeRef && existing.nodeId !== undefined) {
@@ -281,13 +287,30 @@ export async function runProgram(
           } finally {
             task.outBus = prevOutBus
             ctx.bridge.flushMessages()
-            // Schedule kill — cancelled if next iteration reuses before it fires
-            const killDelay = (step.opts.kill_delay as number) ?? 1.0
-            existing.killTimer = setTimeout(() => {
-              ctx.bridge!.freeGroup(existing.groupId)
-              ctx.bridge!.freeBus(existing.bus)
-              ctx.reusableFx.delete(fxKey)
-            }, killDelay * 1000)
+            // Schedule kill in VIRTUAL TIME (SV41) — cancelled if next iter
+            // reuses before its horizon. setTimeout-based (real-time) scheduling
+            // raced post-SV40-purge real-time-paced iterations (SP87).
+            //
+            // GUARD: only schedule if our `existing` state is STILL the active
+            // entry in the Map. After SonicPiEngine's hot-swap reusableFx.clear,
+            // this iter's `existing` reference becomes stale (resources already
+            // freed by clear); a scheduled kill would (a) leak an uncancellable
+            // callback and (b) eventually run /n_free + freeBus on the freed
+            // (and possibly re-allocated) resources. The next iter will hit
+            // CREATE branch and own the new state's killTimer.
+            if (ctx.reusableFx.get(fxKey) === existing) {
+              const killDelay = (step.opts.kill_delay as number) ?? 1.0
+              const killAt = task.virtualTime + killDelay
+              existing.killTimer = ctx.scheduler.scheduleAtVirtualTime(killAt, () => {
+                // /n_free the FX synth itself — applyFxImmediate puts it in
+                // root group 101 (not the container group), so freeGroup
+                // alone leaves the synth running and ringing into outer FX.
+                ctx.bridge!.freeNode(existing.nodeId)
+                ctx.bridge!.freeGroup(existing.groupId)
+                ctx.bridge!.freeBus(existing.bus)
+                ctx.reusableFx.delete(fxKey)
+              })
+            }
           }
         } else {
           // First iteration — create FX node
@@ -318,15 +341,17 @@ export async function runProgram(
           } finally {
             task.outBus = prevOutBus
             ctx.bridge.flushMessages()
-            // Schedule kill — if next iteration reuses, timer is cancelled
+            // Schedule kill in VIRTUAL TIME (SV41) — if next iter reuses, cancelled
             const killDelay = (step.opts.kill_delay as number) ?? 1.0
             const state = ctx.reusableFx.get(fxKey)
             if (state) {
-              state.killTimer = setTimeout(() => {
+              const killAt = task.virtualTime + killDelay
+              state.killTimer = ctx.scheduler.scheduleAtVirtualTime(killAt, () => {
+                ctx.bridge!.freeNode(state.nodeId)
                 ctx.bridge!.freeGroup(state.groupId)
                 ctx.bridge!.freeBus(state.bus)
                 ctx.reusableFx.delete(fxKey)
-              }, killDelay * 1000)
+              })
             }
           }
         }

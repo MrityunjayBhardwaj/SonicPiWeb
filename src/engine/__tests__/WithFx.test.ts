@@ -92,8 +92,11 @@ describe('with_fx', () => {
     expect(bridge.calls).toContain('alloc:16')
     expect(bridge.calls).toContain('fx:reverb:in16:out0')
     expect(bridge.calls).toContain('createGroup:5000')
-    // Group freeing is delayed by kill_delay (default 1s) — advance timers
-    await new Promise(r => setTimeout(r, 1100))
+    // Group freeing is delayed by kill_delay (default 1s of VIRTUAL time, SV41)
+    // — advance the scheduler past the kill horizon. cbHorizon = target -
+    // schedAhead, so target=200 with schedAhead=100 → cbHorizon=100 ≥ 1.5.
+    scheduler.tick(200)
+    await flushMicrotasks()
     expect(bridge.calls).toContain('freeGroup:5000')
     expect(bridge.calls).toContain('free:16')
   })

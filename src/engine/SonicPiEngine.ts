@@ -86,13 +86,13 @@ export class SonicPiEngine {
   /** Maps DSL nodeRef → SuperSonic nodeId for control messages */
   private nodeRefMap = new Map<number, number>()
   /** Reusable inner FX nodes — persists across loop iterations. See issue #70.
-   *  `killTimer` is the pending `setTimeout` handle that frees this FX 1s after
-   *  its last iteration if no follow-up iteration cancels it. On hot-swap /
-   *  stop we MUST clearTimeout these before dropping the map entries, otherwise
-   *  the stale timer fires later and calls freeBus/freeGroup on what are by
-   *  then NEW live FX resources — corrupting the bus pool and silently killing
-   *  groups (issue #290). */
-  private reusableFx = new Map<string, { bus: number; groupId: number; nodeId: number; outBus: number; killTimer?: ReturnType<typeof setTimeout> }>()
+   *  `killTimer` is the pending virtual-time-scheduled kill handle (SV41) that
+   *  frees this FX after kill_delay seconds of virtual time if no follow-up
+   *  iteration cancels it. On hot-swap / stop we MUST `.cancel()` these before
+   *  dropping the map entries, otherwise the stale callback fires later and
+   *  calls freeBus/freeGroup on what are by then NEW live FX resources —
+   *  corrupting the bus pool and silently killing groups (issue #290, SP82). */
+  private reusableFx = new Map<string, { bus: number; groupId: number; nodeId: number; outBus: number; killTimer?: { cancel: () => void } }>()
   /** Pending volume to apply when bridge initializes */
   private pendingVolume: number | null = null
   /** Stored builder functions for capture/query path */
@@ -129,7 +129,7 @@ export class SonicPiEngine {
    */
   private currentBuildBuilder: ProgramBuilder | null = null
   /** Persistent top-level FX state — keyed by scope ID, shared across loops in same with_fx. */
-  private persistentFx = new Map<string, { buses: number[]; groups: number[]; outBus: number }>()
+  private persistentFx = new Map<string, { buses: number[]; groups: number[]; nodeIds: number[]; outBus: number }>()
   /** Maps loop name → FX scope ID (loops under same with_fx share a scope). */
   private loopFxScope = new Map<string, string>()
   /** Maps FX scope ID → FX chain definition. */
@@ -617,6 +617,7 @@ export class SonicPiEngine {
               let currentOutBus = task.outBus
               const buses: number[] = []
               const groups: number[] = []
+              const nodeIds: number[] = []
 
               // Create FX chain: outermost first
               // Signal flow: synth → innermost FX bus → ... → outermost FX → output
@@ -627,14 +628,19 @@ export class SonicPiEngine {
                   ? (m: string) => this.printHandler!(`[Warning] with_fx :${fx.name} — ${m}`)
                   : undefined
                 const fxOpts = normalizeFxParams(fx.name, fx.opts, task.bpm, fxWarn)
-                await this.bridge.applyFx(fx.name, audioTime, fxOpts, bus, currentOutBus)
+                // Capture nodeId — applyFxImmediate dispatches /s_new with the
+                // FX synth as a direct child of group 101 (NOT this container
+                // group), so freeGroup alone won't reach the synth on teardown.
+                // We /n_free this id explicitly when the scope is orphaned.
+                const nodeId = await this.bridge.applyFx(fx.name, audioTime, fxOpts, bus, currentOutBus)
                 this.bridge.flushMessages()
                 buses.push(bus)
                 groups.push(groupId)
+                nodeIds.push(nodeId)
                 currentOutBus = bus
               }
 
-              this.persistentFx.set(scopeId, { buses, groups, outBus: currentOutBus })
+              this.persistentFx.set(scopeId, { buses, groups, nodeIds, outBus: currentOutBus })
             }
           }
 
@@ -1479,6 +1485,11 @@ export class SonicPiEngine {
           const survivingScopes = new Set(this.fxScopeChains.keys())
           for (const [scopeId, state] of this.persistentFx) {
             if (survivingScopes.has(scopeId)) continue  // keep alive
+            // /n_free the FX synth itself first. applyFxImmediate placed it
+            // as a direct child of root FX group 101 (NOT inside this
+            // container), so freeGroup alone would free an empty container
+            // while the FX synth keeps rendering on the master bus.
+            for (const nodeId of state.nodeIds) this.bridge.freeNode(nodeId)
             for (const group of state.groups) this.bridge.freeGroup(group)
             for (const bus of state.buses) this.bridge.freeBus(bus)
             this.persistentFx.delete(scopeId)
@@ -1490,7 +1501,12 @@ export class SonicPiEngine {
           //     group (live — /g_freeAll isn't called anymore), then return
           //     the bus index to the pool.
           for (const state of this.reusableFx.values()) {
-            if (state.killTimer) clearTimeout(state.killTimer)
+            state.killTimer?.cancel()
+            // /n_free the FX synth — applyFxImmediate placed it in root group
+            // 101, not the container group, so freeGroup alone leaves the
+            // synth alive and audibly ringing into outer FX scopes (SP87
+            // residual on :arp's outer reverb after hot-swap).
+            this.bridge.freeNode(state.nodeId)
             this.bridge.freeGroup(state.groupId)
             this.bridge.freeBus(state.bus)
           }
@@ -1585,6 +1601,7 @@ export class SonicPiEngine {
       let currentOutBus = 0  // FX-wrapped loops route to master through chain
       const buses: number[] = []
       const groups: number[] = []
+      const nodeIds: number[] = []
       for (const fx of fxChain) {
         const bus = this.bridge.allocateBus()
         const groupId = this.bridge.createFxGroup()
@@ -1595,13 +1612,17 @@ export class SonicPiEngine {
         // audioTime=0 → scsynth processes immediately (before any
         // future-timed sample bundles can race past). Awaiting the
         // promise ensures synthdef load completes before the next FX.
-        await this.bridge.applyFx(fx.name, 0, fxOpts, bus, currentOutBus)
+        // Capture nodeId — applyFxImmediate puts the FX synth in group 101
+        // (not this container group), so we must /n_free it explicitly on
+        // orphan teardown.
+        const nodeId = await this.bridge.applyFx(fx.name, 0, fxOpts, bus, currentOutBus)
         this.bridge.flushMessages(0)
         buses.push(bus)
         groups.push(groupId)
+        nodeIds.push(nodeId)
         currentOutBus = bus
       }
-      this.persistentFx.set(scopeId, { buses, groups, outBus: currentOutBus })
+      this.persistentFx.set(scopeId, { buses, groups, nodeIds, outBus: currentOutBus })
     }
   }
 
@@ -1676,7 +1697,7 @@ export class SonicPiEngine {
     // synchronously here so the bus index returns to the pool instead of
     // leaking (same root cause as the persistentFx loop above).
     for (const state of this.reusableFx.values()) {
-      if (state.killTimer) clearTimeout(state.killTimer)
+      state.killTimer?.cancel()
       this.bridge?.freeBus(state.bus)
     }
     this.reusableFx.clear()
