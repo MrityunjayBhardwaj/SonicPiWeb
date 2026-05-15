@@ -569,6 +569,16 @@ export class SuperSonicBridge {
     if (!this.sonic) throw new Error('SuperSonic not initialized')
     const p = this.sonic.loadSynthDef(fullName).then(() => {
       this.loadedSynthDefs.add(fullName)
+    }).finally(() => {
+      // SV43 (synthdef twin of the #317 sample fix): clear the in-flight
+      // dedup entry whether the load RESOLVES OR REJECTS. The old code
+      // deleted only inside .then(), so a failed synthdef load (SP89-class:
+      // an inventory name the CDN package never shipped, or a transient
+      // fetch failure) left a permanently-rejecting promise cached here —
+      // every later ensureSynthDefLoaded(name) returned that rejection and
+      // the synth/FX was silent forever, no error. Clearing on reject lets
+      // a later retry re-attempt the load instead of replaying the dead
+      // rejection (and unblocks the #318 preflight resolver).
       this.pendingSynthDefLoads.delete(fullName)
     })
     this.pendingSynthDefLoads.set(fullName, p)

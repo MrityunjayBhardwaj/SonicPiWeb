@@ -171,6 +171,32 @@ describe('SuperSonicBridge', () => {
     expect(mockSonic.loadSample).toHaveBeenCalledTimes(2)
   })
 
+  it('SV43 twin: a rejected synthdef load does not poison subsequent retries (#318.4)', async () => {
+    const { mockSonic } = createMockSuperSonic()
+    ;(globalThis as Record<string, unknown>).SuperSonic = vi.fn(() => mockSonic)
+
+    const bridge = new SuperSonicBridge()
+    await bridge.init()
+
+    // First synthdef load rejects — SP89-class: an inventory name the CDN
+    // package never shipped, or a transient fetch failure. Subsequent loads
+    // resolve (transient recovered, or a retry path).
+    mockSonic.loadSynthDef.mockReset()
+    mockSonic.loadSynthDef
+      .mockRejectedValueOnce(new Error('CORS/404'))
+      .mockResolvedValue(undefined)
+
+    // The failed load must SURFACE as an error, not resolve silently.
+    await expect(bridge.triggerSynth('hollow', 0, { note: 60 })).rejects.toThrow()
+
+    // Pre-fix (delete only in .then()): pendingSynthDefLoads still holds the
+    // rejected promise, so this returns the cached rejection and loadSynthDef
+    // is never called again — that synth silent forever. Post-fix (.finally
+    // clears the entry): the retry re-attempts the load and succeeds.
+    await bridge.triggerSynth('hollow', 0, { note: 60 })
+    expect(mockSonic.loadSynthDef).toHaveBeenCalledTimes(2)
+  })
+
   it('caches loaded SynthDefs', async () => {
     const { mockSonic } = createMockSuperSonic()
     ;(globalThis as Record<string, unknown>).SuperSonic = vi.fn(() => mockSonic)
