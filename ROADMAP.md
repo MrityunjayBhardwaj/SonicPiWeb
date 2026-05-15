@@ -104,6 +104,17 @@ These features are wired and Level-2 verified (events, logs, WAV-free E2E tests)
 - [ ] WebSocket-to-UDP bridge (bundled option, not just hook)
 - [ ] `sync "/osc/..."` path delivery via WebSocket
 
+### Tutorial system port (EPIC #309)
+
+Port the ~90-chapter Desktop Sonic Pi tutorial as a first-class web subsystem — the largest remaining parity item (~98% target, lifts help coverage 311 → ~600 entries). Standalone `TutorialPanel` + structured corpus + ingest/validation tooling; `HelpPanel` (per-symbol reference) stays separate, mirroring desktop's dedicated tutorial pane. Dependency order: **T0 → T1 → {T2 → T3, T4} → T5** (~6.5 wk).
+
+- [ ] **T0 — license & source gate (#310) — 🚧 BLOCKING: T1–T5 do not start until T0 closes GO**
+- [ ] T1 — ingest pipeline + data model (#311)
+- [ ] T2 — code-block validation gate, Level 2/3 (#312)
+- [ ] T3 — web-adaptation overlay + "What's different from Desktop SP" chapter (#313)
+- [ ] T4 — TutorialPanel UI (#314)
+- [ ] T5 — polish (lazy-load, assets, search) + Level-3 observation (#315)
+
 ### Collaboration
 - [ ] Ableton Link via WebRTC DataChannel
 - [ ] Collaborative live coding (CRDT sync via Yjs + WebRTC)
