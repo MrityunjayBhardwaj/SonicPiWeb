@@ -640,8 +640,11 @@ export class Editor {
     // Keybindings
     try {
       const runKeymap = cm.keymap.of([
-        // Run is wired at the document level in App.ts so it works regardless
-        // of which panel has focus. No Run binding here on purpose.
+        // Run is ALSO wired at the document level in App.ts (so focus on console/
+        // scope still triggers Run). The editor-level binding here exists to
+        // consume the event before CodeMirror's default Enter handler inserts
+        // a newline into the buffer.
+        { key: 'Mod-Enter', preventDefault: true, run: () => { this.onRunCallback?.(); return true } },
         { key: 'Escape', run: () => { this.onStopCallback?.(); return true } },
         { key: 'F11', run: () => { this.onZenCallback?.(); return true } },
         {
