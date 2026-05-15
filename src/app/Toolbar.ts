@@ -27,6 +27,7 @@ export interface ToolbarCallbacks {
   onFontSizeChange?: (delta: number) => void
   onSave?: () => void
   onLoad?: () => void
+  onShare?: () => void
   onZen?: () => void
 }
 
@@ -113,6 +114,16 @@ export class Toolbar {
     loadBtn.title = 'Load file into buffer'
     loadBtn.style.opacity = '0.7'
     topRow.appendChild(loadBtn)
+
+    // Share button — copy a permalink that reconstructs the current buffer
+    const shareBtn = this.iconButton(
+      '\u{1F517}', 'Share',
+      () => this.callbacks.onShare?.(),
+      { bg: theme.comment, hover: theme.fgMuted }
+    )
+    shareBtn.title = 'Copy a shareable link to this track'
+    shareBtn.style.opacity = '0.7'
+    topRow.appendChild(shareBtn)
 
     topRow.appendChild(this.separator())
 

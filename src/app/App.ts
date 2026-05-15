@@ -17,6 +17,7 @@ import { CueLog } from './CueLog'
 import { SampleBrowser } from './SampleBrowser'
 import { HelpPanel } from './HelpPanel'
 import { APP_VERSION } from './version'
+import { decodeShareCode, buildShareURL } from './ShareLink'
 import { theme } from './theme'
 import { track, EVENTS, errorClass, detectBrowserFamily } from './Analytics'
 
@@ -469,6 +470,18 @@ export class App {
 
   /** Load buffers from localStorage, falling back to welcome code. */
   private loadBuffers(): void {
+    // A share link takes precedence over everything: you clicked someone's
+    // permalink, you want their track — not your stale localStorage buffer.
+    // Strip the hash afterwards so a refresh / unload-save behaves normally
+    // (the shared code is now just the active buffer).
+    const shared = decodeShareCode()
+    if (shared !== null) {
+      this.buffers[0] = shared
+      try {
+        history.replaceState(null, '', location.pathname + location.search)
+      } catch { /* history API unavailable — harmless, hash just lingers */ }
+      return
+    }
     try {
       const saved = localStorage.getItem('spw-buffers')
       if (saved) {
@@ -583,6 +596,7 @@ export class App {
       onFontSizeChange: (delta) => this.editor.changeFontSize(delta),
       onSave: () => this.handleSave(),
       onLoad: () => this.handleLoad(),
+      onShare: () => this.handleShare(),
       onZen: () => this.toggleZen(),
     })
 
@@ -1222,6 +1236,41 @@ export class App {
       this.console.logSystem(`  Loaded: ${file.name}`)
     }
     input.click()
+  }
+
+  private async handleShare(): Promise<void> {
+    const url = buildShareURL(this.editor.getValue())
+    let copied = false
+    try {
+      await navigator.clipboard.writeText(url)
+      copied = true
+    } catch {
+      // Clipboard blocked (insecure context / permission). Fall back to a
+      // prompt so the link is still recoverable — never silently fail.
+      try { window.prompt('Copy this share link:', url) } catch { /* headless */ }
+    }
+    this.console.logSystem(copied ? '  Share link copied to clipboard.' : '  Share link ready.')
+    this.flashToast(copied ? 'Share link copied' : 'Share link ready')
+  }
+
+  /** Transient bottom-center toast — feedback when the Console panel is hidden. */
+  private flashToast(msg: string): void {
+    const el = document.createElement('div')
+    el.textContent = msg
+    el.style.cssText = `
+      position: fixed; left: 50%; bottom: 2.5rem; transform: translateX(-50%);
+      background: ${theme.bgDark}; color: ${theme.fg};
+      border: 1px solid ${theme.comment}; border-radius: 6px;
+      padding: 0.5rem 1rem; font-size: 0.8rem; font-family: inherit;
+      z-index: 99999; pointer-events: none; opacity: 0;
+      transition: opacity 0.15s;
+    `
+    this.root.appendChild(el)
+    requestAnimationFrame(() => { el.style.opacity = '1' })
+    setTimeout(() => {
+      el.style.opacity = '0'
+      setTimeout(() => el.remove(), 200)
+    }, 1800)
   }
 
   private toggleZen(): void {
