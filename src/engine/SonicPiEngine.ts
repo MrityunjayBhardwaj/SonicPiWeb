@@ -23,6 +23,8 @@ import { initTreeSitter } from './TreeSitterTranspiler'
  */
 const CLAMP_WARN_RE = /clamped to .+ \((min|max)\)$/
 import { friendlyError, formatFriendlyError, type FriendlyError } from './FriendlyErrors'
+import { scanComponentNames } from './ComponentScan'
+import { resolveComponentManifest } from './ComponentResolver'
 import { detectStratum, Stratum } from './Stratum'
 import { SoundEventStream } from './SoundEventStream'
 import { ring, knit, range, line, doubles, halves, Ring } from './Ring'
@@ -297,6 +299,35 @@ export class SonicPiEngine {
 
       // First run or after stop: create fresh scheduler
       if (!isReEvaluate) {
+        // Pre-Run component preflight (#318 / #323). Statically-named
+        // samples/synths/FX are loaded NOW; if any genuinely-missing one
+        // can't load, refuse Run with a clear message instead of starting
+        // and silently dropping it (the SP5/SP84/SP89/SP90 cluster).
+        // Fresh Run only — a hot-swap must NOT re-block a held performance
+        // (it lazy-loads and, post-#320, self-heals on transient failure).
+        // `user_` custom samples are exempt (warning, not block): the host
+        // may registerCustomSample around/after Run. Static scan catches
+        // literal names only; runtime-computed names still lazy-load.
+        if (this.bridge) {
+          const manifest = scanComponentNames(code)
+          const { hardMisses, warnings } = await resolveComponentManifest(manifest, {
+            sample: (n) => this.bridge!.preloadSample(n),
+            synth: (n) => this.bridge!.preloadSynth(n),
+            fx: (n) => this.bridge!.preloadFx(n),
+          })
+          for (const w of warnings) {
+            if (this.printHandler) {
+              this.printHandler(
+                `[Warning] sample :${w} isn't loaded yet — it will play once registered`,
+              )
+            }
+          }
+          if (hardMisses.length > 0) {
+            const list = hardMisses.map((n) => `:${n}`).join(', ')
+            return { error: new Error(`Couldn't load: ${list}`) }
+          }
+        }
+
         if (this.scheduler) {
           this.scheduler.dispose()
         }

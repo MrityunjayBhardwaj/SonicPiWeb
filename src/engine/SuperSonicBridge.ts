@@ -560,6 +560,28 @@ export class SuperSonicBridge {
     )
   }
 
+  /**
+   * Preload ONE synth synthdef binary, REJECTING on failure. The
+   * non-swallowing counterpart to `preloadFxSynthDefs` — the #318/#323
+   * pre-Run preflight needs a truthful per-name pass/fail so it can block
+   * Run (or surface it) instead of the SP5 silent-drop-at-/s_new. Pass the
+   * synth name WITHOUT prefix ('saw', 'prophet'); `ensureSynthDefLoaded`
+   * adds `sonic-pi-`. Safe only because #320 fixed the reject-leak — a
+   * failed preflight no longer poisons the later real /s_new.
+   */
+  preloadSynth(name: string): Promise<void> {
+    return this.ensureSynthDefLoaded(name)
+  }
+
+  /**
+   * Preload ONE FX synthdef binary, REJECTING on failure (see
+   * `preloadSynth`). Pass the FX name WITHOUT prefix ('reverb', 'echo') —
+   * `sonic-pi-fx_` is added here to match `preloadFxSynthDefs`'s contract.
+   */
+  preloadFx(name: string): Promise<void> {
+    return this.ensureSynthDefLoaded(`sonic-pi-fx_${name}`)
+  }
+
   private ensureSynthDefLoaded(name: string): Promise<void> {
     const fullName = name.startsWith('sonic-pi-') ? name : `sonic-pi-${name}`
     if (this.loadedSynthDefs.has(fullName)) return Promise.resolve()
