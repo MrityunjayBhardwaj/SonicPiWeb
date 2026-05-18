@@ -154,7 +154,12 @@ interface PitchTrack {
   count: number
   median_spacing_s: number
   midi: (number | null)[]
+  pc: (number | null)[]
   names: (string | null)[]
+  method: string
+  confidence: number
+  inconclusive: boolean
+  compare: 'midi' | 'pitch_class'
 }
 
 interface ComparisonResult {
@@ -255,19 +260,27 @@ function writeComparisonReport(r: ComparisonResult): void {
   const t1: string[] = []
   let pitchVerdict = 'not analysed'
   if (dp && wp) {
-    const ds = dp.midi.filter(x => x !== null) as number[]
-    const ws = wp.midi.filter(x => x !== null) as number[]
-    const n = Math.min(ds.length, ws.length)
+    // #348: cheap contour is octave-unstable → compare pitch CLASSES when
+    // either side used contour mode (octave error cancels). Exact MIDI only
+    // when both sides are onset-tracked.
+    const pcMode = dp.compare === 'pitch_class' || wp.compare === 'pitch_class'
+    const dSeq = (pcMode ? dp.pc : dp.midi).filter(x => x !== null) as number[]
+    const wSeq = (pcMode ? wp.pc : wp.midi).filter(x => x !== null) as number[]
+    const unit = pcMode ? 'pitch-classes (octave-invariant — contour mode)' : 'notes'
+    const n = Math.min(dSeq.length, wSeq.length)
     let mismatch = -1
-    for (let i = 0; i < n; i++) if (ds[i] !== ws[i]) { mismatch = i; break }
-    if (n === 0) pitchVerdict = '⚠ no notes detected on one/both sides'
-    else if (mismatch < 0) pitchVerdict = `✓ PITCH-MATCH — note sequences identical over ${n} notes`
-    else pitchVerdict = `✗ PITCH DIVERGENCE at note ${mismatch} (desktop ${ds[mismatch]} vs web ${ws[mismatch]})`
+    for (let i = 0; i < n; i++) if (dSeq[i] !== wSeq[i]) { mismatch = i; break }
+    const inconc = dp.inconclusive || wp.inconclusive
+    if (inconc) pitchVerdict = `⚠ INCONCLUSIVE — contour-low confidence (desktop ${dp.method}/${dp.confidence}, web ${wp.method}/${wp.confidence}); sustained/noisy material, no Tier-1 verdict`
+    else if (n === 0) pitchVerdict = '⚠ no notes detected on one/both sides'
+    else if (mismatch < 0) pitchVerdict = `✓ PITCH-MATCH — ${unit} identical over ${n}`
+    else pitchVerdict = `✗ PITCH DIVERGENCE at ${pcMode ? 'pc' : 'note'} ${mismatch} (desktop ${dSeq[mismatch]} vs web ${wSeq[mismatch]})`
     const dt = dp.median_spacing_s, wt = wp.median_spacing_s
     const tempoOk = dt > 0 && Math.abs(dt - wt) / dt < 0.1
     t1.push(`- **1.1 Note progression:** ${pitchVerdict}`)
-    t1.push(`  - desktop: \`${dp.midi.slice(0, 24).join(',')}\``)
-    t1.push(`  - web&nbsp;&nbsp;&nbsp;: \`${wp.midi.slice(0, 24).join(',')}\``)
+    t1.push(`  - method: desktop \`${dp.method}\` (conf ${dp.confidence}) · web \`${wp.method}\` (conf ${wp.confidence})${pcMode ? ' · compared octave-invariant' : ''}`)
+    t1.push(`  - desktop: \`${(pcMode ? dp.pc : dp.midi).slice(0, 24).join(',')}\``)
+    t1.push(`  - web&nbsp;&nbsp;&nbsp;: \`${(pcMode ? wp.pc : wp.midi).slice(0, 24).join(',')}\``)
     t1.push(`- **1.2 Tempo (inter-onset):** ${tempoOk ? '✓' : '✗'} desktop ${dt.toFixed(3)}s · web ${wt.toFixed(3)}s/note`)
     t1.push(`- **1.3 Onset count:** desktop ${dp.count} · web ${wp.count}${durDelta > 0.5 ? ' (Δ explained by Tier-0 window misalignment)' : ''}`)
     t1.push('- ◦ 1.4 note duration / 1.5 polyphony / 1.6 determinism — not auto-tracked here (unit tests cover determinism; see SV24/SV45)')
@@ -504,10 +517,18 @@ async function main(): Promise<void> {
   const runPitch = async (wav: string | null): Promise<PitchTrack | null> => {
     if (!wav) return null
     try {
-      const py = await runChild('python3', ['tools/pitchtrack.py', '--json', wav])
+      const pArgs = ['tools/pitchtrack.py', '--json']
+      if (args.bpm !== null) pArgs.push('--bpm', String(args.bpm))
+      pArgs.push(wav)
+      const py = await runChild('python3', pArgs)
       if (py.exitCode !== 0) return null
       const d = JSON.parse(py.stdout.trim().split('\n').pop() as string)
-      return { count: d.count, median_spacing_s: d.median_spacing_s, midi: d.midi, names: d.names }
+      return {
+        count: d.count, median_spacing_s: d.median_spacing_s,
+        midi: d.midi, pc: d.pc, names: d.names,
+        method: d.method, confidence: d.confidence,
+        inconclusive: d.inconclusive, compare: d.compare,
+      }
     } catch { return null }
   }
   const [desktopPitch, webPitch] = await Promise.all([runPitch(desktopWav), runPitch(webWav)])
