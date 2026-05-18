@@ -790,6 +790,66 @@ describe('ProgramBuilder', () => {
       expect(atBeat).toBeCloseTo(0.5, 9)
     })
 
+    it('#345: use_osc target threads into with_fx/in_thread/at (SP94 class)', () => {
+      // Desktop SP `core.rb:649-653` stores [host, port] in :sonic_pi_osc_client
+      // thread-local. with_fx continues it; in_thread/at snapshot at fork. Prior
+      // to the #345 fix, none of the three modes inherited it — `osc` inside a
+      // sub-builder fell back to the default localhost:4560.
+
+      type OscSend = { tag: 'oscSend'; host: string; port: number }
+      const findOsc = (steps: Array<{ tag: string }>): OscSend =>
+        steps.find((s) => s.tag === 'oscSend') as OscSend
+      const subBody = (s: { tag: string }): Array<{ tag: string }> =>
+        (s as unknown as { body: Array<{ tag: string }> }).body
+
+      // with_fx: same-thread continuation
+      const bf = new ProgramBuilder()
+      bf.use_osc('remote.host', 9000)
+      bf.with_fx('reverb', {}, (inner) => { inner.osc('/path', 1); return inner })
+      const fxStep = bf.build().find((s) => s.tag === 'fx')!
+      const fxOsc = findOsc(subBody(fxStep))
+      expect(fxOsc.host).toBe('remote.host')
+      expect(fxOsc.port).toBe(9000)
+
+      // in_thread: forked snapshot
+      const bt = new ProgramBuilder()
+      bt.use_osc('thread.host', 9001)
+      bt.in_thread((inner) => { inner.osc('/path', 1) })
+      const tStep = bt.build().find((s) => s.tag === 'thread')!
+      const tOsc = findOsc(subBody(tStep))
+      expect(tOsc.host).toBe('thread.host')
+      expect(tOsc.port).toBe(9001)
+
+      // at: forked snapshot per offset
+      const ba = new ProgramBuilder()
+      ba.use_osc('at.host', 9002)
+      ba.at([0], null, (inner) => { inner.osc('/path', 1) })
+      const aStep = ba.build().find((s) => s.tag === 'thread')!
+      const aOsc = findOsc(subBody(aStep))
+      expect(aOsc.host).toBe('at.host')
+      expect(aOsc.port).toBe(9002)
+    })
+
+    it('#345: in_thread/at snapshot use_osc at fork (outer reassign does not retro-affect inner)', () => {
+      // Forked semantics: thread-local value is captured at fork time. A later
+      // outer `use_osc` must NOT change what the inner already-built program
+      // sees (it built its osc step with the value at fork).
+      const b = new ProgramBuilder()
+      b.use_osc('first.host', 9100)
+      b.in_thread((inner) => { inner.osc('/path', 1) })
+      b.use_osc('second.host', 9200)              // outer reassigns AFTER fork
+      b.osc('/outer', 1)                          // outer's osc uses the new value
+      type OscSend = { tag: 'oscSend'; host: string; port: number }
+      const prog = b.build()
+      const threadStep = prog.find((s) => s.tag === 'thread') as { tag: 'thread'; body: Array<{ tag: string }> }
+      const innerOsc = threadStep.body.find((s) => s.tag === 'oscSend') as OscSend
+      const outerOsc = prog.find((s) => s.tag === 'oscSend') as OscSend
+      expect(innerOsc.host).toBe('first.host')    // inner captured pre-reassign
+      expect(innerOsc.port).toBe(9100)
+      expect(outerOsc.host).toBe('second.host')   // outer sees post-reassign
+      expect(outerOsc.port).toBe(9200)
+    })
+
     it('Defect B: at inherits iteration introspection (#226), like with_fx/in_thread', () => {
       const b = new ProgramBuilder()
       ;(b as unknown as { _currentBuildSeconds: number })._currentBuildSeconds = 9.5

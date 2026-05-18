@@ -359,6 +359,14 @@ export class ProgramBuilder {
     // with_fx (same thread) continues it; in_thread/at snapshot it at fork.
     // Previously NO sub-builder inherited it → silent 2× tempo error.
     inner._currentBpm = this._currentBpm
+    // #345: use_osc sets :sonic_pi_osc_client as a thread-local in desktop SP
+    // (core.rb:649-653). Same SP94 drift class as #343 — the inherit-list
+    // omitted this field. Same handling as _currentBpm: with_fx (same thread)
+    // continues; in_thread/at snapshot at fork. Without this, `osc "/path"`
+    // inside a sub-builder targets the default localhost:4560 instead of the
+    // outer's use_osc target.
+    inner._oscHost = this._oscHost
+    inner._oscPort = this._oscPort
     // Iteration introspection (#226) so current_time / current_beat inside
     // with_fx / in_thread / at return the outer's values. #343 Defect B:
     // `at` used to drop these.
