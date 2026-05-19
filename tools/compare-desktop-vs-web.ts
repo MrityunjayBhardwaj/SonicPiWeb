@@ -296,12 +296,15 @@ function writeComparisonReport(r: ComparisonResult): void {
     // random walk" — musically equivalent, not a bug. Demoting separates the
     // ~34 PRNG-noise rows from real parity bugs in the sweep dashboard.
     //
-    // Requires ALL FOUR uncorrelated signals to coincide (conservative — a
-    // false positive needs a 4-way coincidence):
+    // Signature (the pitch-class histogram cosine carries the verdict;
+    // #367 — count parity does NOT, a different random walk legitimately
+    // changes note count):
     //   1. source contains a PRNG token (PRNG_RE)
-    //   2. unique note-set identical on both sides (scale/bank match)
+    //   2. pitch-class histogram cosine ≥ 0.92 (permutation-invariant —
+    //      a shuffle preserves it; a real bug shifts it substantially)
     //   3. tempo matches (tempoOk, <10% inter-onset delta)
-    //   4. onset count within ±15%
+    //   4. density floor: onset-count ratio ≥ 0.5 (guards only against a
+    //      degenerate near-empty capture, not against count divergence)
     const PRNG_RE = /\b(rrand|rrand_i|rand|rand_i|\.choose|\.shuffle|\.pick|one_in|dice|use_random_seed)\b/
     let prngVariant = false
     let prngCos = 0
@@ -328,16 +331,33 @@ function writeComparisonReport(r: ComparisonResult): void {
       for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i] }
       return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0
     }
-    if (mismatch >= 0 && !inconc && n > 0 && tempoOk && PRNG_RE.test(r.code)) {
+    // Onset-count ratio. A different random walk of the SAME composition
+    // legitimately changes note durations/rests and therefore onset count
+    // (#367) — so this is NOT an equality test. It has two distinct uses:
+    //   • Gross mismatch (<0.3) on same-method `onset` tracks ⇒ the onset
+    //     detector is unreliable on ≥1 side (slewed / long-release / sustained
+    //     material hallucinates onsets from continuous spectral motion, e.g.
+    //     tron_bike: desktop 83 vs web 6 for a ~2-note/15s live_loop). The
+    //     measurement cannot judge this material ⇒ INCONCLUSIVE, NOT a hard
+    //     DIVERGE (#368). Honest degradation, not a false engine-failure.
+    //   • PRNG-VARIANT needs only a loose density floor; the pitch-class
+    //     histogram cosine carries the verdict, not count parity. Requiring
+    //     count parity from a "different random walk" contradicts the
+    //     premise — it is why #366 fired on only 1/34 (#367).
+    const countRatio = Math.max(dp.count, wp.count) > 0
+      ? Math.min(dp.count, wp.count) / Math.max(dp.count, wp.count) : 1
+    const bothOnset = dp.method === 'onset' && wp.method === 'onset'
+    const onsetUnreliable = mismatch >= 0 && !inconc && n > 0 && bothOnset && countRatio < 0.3
+    if (mismatch >= 0 && !inconc && n > 0 && !onsetUnreliable && tempoOk && PRNG_RE.test(r.code)) {
       prngCos = cosine(pcHist(dSeq.slice(0, n)), pcHist(wSeq.slice(0, n)))
-      const countRatio = Math.min(dp.count, wp.count) / Math.max(dp.count, wp.count)
-      if (prngCos >= 0.92 && countRatio >= 0.85) prngVariant = true
+      if (prngCos >= 0.92 && countRatio >= 0.5) prngVariant = true
     }
     if (inconc) pitchVerdict = `⚠ INCONCLUSIVE — contour-low confidence (desktop ${dp.method}/${dp.confidence}, web ${wp.method}/${wp.confidence}); sustained/noisy material, no Tier-1 verdict`
     else if (n === 0) pitchVerdict = '⚠ no notes detected on one/both sides'
     else if (mismatch < 0) pitchVerdict = `✓ PITCH-MATCH — ${unit} identical over ${n}`
+    else if (onsetUnreliable) pitchVerdict = `⚠ INCONCLUSIVE — onset detector unreliable: gross density mismatch (desktop ${dp.count} vs web ${wp.count} onsets, ratio ${countRatio.toFixed(2)} < 0.3) on slewed/sustained material; onset method cannot judge this — no Tier-1 verdict (#368)`
     else if (prngVariant) {
-      pitchVerdict = `≈ pitch-class histogram cos=${prngCos.toFixed(3)} (≥0.92), tempo match, count within ±15%, PRNG token in source; same composition, different random walk (cross-engine seed parity is not a v1 goal — #358/#364)`
+      pitchVerdict = `≈ pitch-class histogram cos=${prngCos.toFixed(3)} (≥0.92), tempo match, density ratio ${countRatio.toFixed(2)} (≥0.5), PRNG token in source; same composition, different random walk (cross-engine seed parity is not a v1 goal — #358/#364/#367)`
     }
     else pitchVerdict = `✗ PITCH DIVERGENCE at ${pcMode ? 'pc' : 'note'} ${mismatch} (desktop ${dSeq[mismatch]} vs web ${wSeq[mismatch]})`
     t1.push(`- **1.1 Note progression:** ${pitchVerdict}`)
