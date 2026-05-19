@@ -328,27 +328,80 @@ async function captureRun(
       }
       await page.waitForTimeout(1500) // blob flush margin (matches desktop capture-desktop.ts +2500 minus blob-extract overhead)
     } else {
-      // DSL-driven recording (#228 + #358): the user code's `recording_stop` /
-      // `recording_save` fires at user-code t=duration. Wait that long, then
-      // POLL for the blob — fixed `waitForTimeout(duration + 1500)` was the
-      // #358 bug: heavy multi-loop snippets queue WAV encoding behind the
-      // engine work on the main thread, the 1.5s margin races the encode, and
-      // __capturedWavBlob stays null even though the engine rendered audio.
-      // Polling waits exactly as long as needed (capped at 12s extra for
-      // pathologically heavy snippets — beyond that, something's broken).
+      // DSL-driven recording (#228 + #358 + #360): the user code's
+      // `recording_stop` / `recording_save` fires at the END of live_loop
+      // `:__run_once`'s virtual timeline — NOT at real-time t=duration.
+      //
+      // The #360 trap: a fixed `duration + Npoll` budget assumes the
+      // recording window ≈ the `--wrap-recording` arg. That is false for
+      // bare-sequential snippets. `bach.rb`'s top-level music is
+      // `2.times do … play_pattern_timed … end` (bare code — the `in_thread`s
+      // are nested INSIDE it), so ALL of it transpiles into one sequential
+      // `:__run_once`. The wrap appends `with_bpm 60 { sleep 15 }` AFTER it,
+      // so the real recording window = whole piece (~57s) + 15s ≈ 72s. The
+      // engine reaches `recording_save` correctly — it just does so at
+      // virtual t≈72s ≈ real ≈75s, far past the old 45s budget (15s duration
+      // + 30s poll). Bumping the fixed poll cannot fix this: the true window
+      // is unknowable in advance and unrelated to `--duration`. Verified by
+      // controlled A/B — identical bach code, only the budget differs:
+      // 75s wait ⇒ valid 72s WAV; 45s wait ⇒ TOOL-FAIL anchorClicks=0.
+      //
+      // Fix: drive the wait by ENGINE LIVENESS, not a fixed clock. Poll for
+      // the blob; keep the deadline alive as long as the engine is still
+      // emitting cues (every live_loop iteration auto-cues `:name`, so a
+      // growing `window.__capturedCues` proves the recording window is still
+      // open). Give up only after the engine has been quiet for IDLE_GRACE
+      // with still no blob (recording_save genuinely isn't coming), bounded
+      // by a hard ceiling so a pathological hang still terminates the sweep.
       await page.waitForTimeout(duration)
       const startPoll = Date.now()
-      const POLL_INTERVAL_MS = 100
-      // 30s blob-wait — generous enough that heavy multi-loop snippets running
-      // at real-time-bound bpm60 sleeps can land their `recording_save` step
-      // even after extended build/encode delays. Beats 12s (the prior version
-      // raced for FX-heavy chapters). Hard upper: a stuck snippet still bounds
-      // the comparator wall-time at duration + 30s before TOOL-FAIL reports.
-      const POLL_TIMEOUT_MS = 30000
+      const POLL_INTERVAL_MS = 1000
+      // Liveness signal must be DENSE and must NOT plateau:
+      //   - `__capturedCues` is too SPARSE — bach only cues at `in_thread`
+      //     boundaries (~every 8s, then a 24s gap through the final section),
+      //     so a 12s cue-idle grace gave up mid-render.
+      //   - `.spw-console` text LENGTH plateaus once the Console ring buffer
+      //     caps (~500 lines; bach emits 1400+ /s_new), so length also goes
+      //     falsely "idle".
+      // The ring buffer's TAIL keeps changing on every new /s_new even after
+      // the cap, so we hash the last 200 chars of the console pane — dense
+      // for the whole musical span, cheap to transfer (200 chars, not the
+      // full DOM).
+      //
+      // The trailing `with_bpm 60 { sleep ${wrapRecordingSec} }` the wrap
+      // injects is SILENT — no cues, no /s_new — for its full duration before
+      // `recording_stop`/`recording_save` fire. No output-passive signal can
+      // observe it, so the idle grace must be long enough to span that known
+      // sleep PLUS the recording_stop tail-wait + WAV encode + save. We KNOW
+      // that sleep length (`wrapRecordingSec`), so derive the grace from it
+      // rather than guessing a fixed budget (the #360 root cause).
+      const trailingSilentMs = (opts.wrapRecordingSec ?? 0) * 1000
+      const IDLE_GRACE_MS = trailingSilentMs + 12000  // sleep + encode/save margin
+      // Absolute safety net: a page that never goes idle (e.g. a runaway
+      // loop) still bounds comparator wall-time before TOOL-FAIL reports.
+      const HARD_CEILING_MS = 180000
+      const probeActivity = () =>
+        page.evaluate(() => {
+          const blob = (window as any).__capturedWavBlob != null
+          const cues = ((window as any).__capturedCues?.length ?? 0) as number
+          const pane =
+            document.querySelector('.spw-console') ?? document.querySelector('#app')
+          const txt = pane?.textContent ?? ''
+          return { blob, cues, tail: txt.slice(-200) }
+        })
       let blobReady = false
-      while (Date.now() - startPoll < POLL_TIMEOUT_MS) {
-        blobReady = await page.evaluate(() => (window as any).__capturedWavBlob != null)
-        if (blobReady) break
+      let last = await probeActivity()
+      let lastActivityTs = Date.now()
+      while (true) {
+        const probe = await probeActivity()
+        if (probe.blob) { blobReady = true; break }
+        if (probe.cues > last.cues || probe.tail !== last.tail) {
+          lastActivityTs = Date.now()  // engine still emitting → window still open
+        }
+        last = probe
+        const now = Date.now()
+        if (now - lastActivityTs > IDLE_GRACE_MS) break          // engine idle, no blob
+        if (now - startPoll > HARD_CEILING_MS) break              // pathological hang
         await page.waitForTimeout(POLL_INTERVAL_MS)
       }
       if (!blobReady) {
@@ -356,7 +409,9 @@ async function captureRun(
         const diagStr = diag
           ? `[diag] createObjectURL=${diag.createObjectURLCalls} blobsTracked=${diag.blobsTracked} anchorClicks=${diag.anchorClicksTotal} wavBlobClicks=${diag.anchorClicksWavBlob} lookupHits=${diag.blobLookupHits} lookupMisses=${diag.blobLookupMisses}`
           : '[diag unavailable]'
-        audioPathReason = `__capturedWavBlob did not appear within ${POLL_TIMEOUT_MS}ms after recording_stop — ${diagStr}`
+        const waitedMs = Date.now() - startPoll
+        const reason = waitedMs > HARD_CEILING_MS ? 'hard ceiling' : `engine idle ${(IDLE_GRACE_MS / 1000).toFixed(0)}s`
+        audioPathReason = `__capturedWavBlob did not appear (${reason}, polled ${(waitedMs / 1000).toFixed(1)}s after the ${(duration / 1000).toFixed(0)}s pre-wait) — ${diagStr}`
       }
     }
 
