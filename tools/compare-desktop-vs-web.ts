@@ -171,7 +171,12 @@ interface ComparisonResult {
   // toolFailReason — populated when capture.ts emitted `**File:** none — <reason>`
   // (a known capture-pipeline failure as opposed to engine silence). Lets the
   // Tier-0 line say TOOL-FAIL distinctly from generic INVALID. See #358.
-  web:     { wavPath: string | null; stats: AudioStats | null; rawStdout: string; ok: boolean; pitch: PitchTrack | null; toolFailReason: string | null }
+  // errors — engine errors collected by capture.ts (pageErrors, console.error,
+  // network failures, app-console runtime-pattern hits). Surfaced as a Tier-0
+  // ERROR verdict distinct from DIVERGE/INVALID/TOOL-FAIL — without it, an
+  // example that throws mid-run is indistinguishable from a real parity bug
+  // (silent or partial audio after the throw → false DIVERGE-at-note-0). #371.
+  web:     { wavPath: string | null; stats: AudioStats | null; rawStdout: string; ok: boolean; pitch: PitchTrack | null; toolFailReason: string | null; errors: string[] }
   spectrogram: SpectrogramMetrics | null
   spectrogramError: string | null
   reportPath: string
@@ -240,10 +245,23 @@ function writeComparisonReport(r: ComparisonResult): void {
   //    INVALID and train readers to ignore the gate.
   const t0: string[] = []
   let invalid = false
+  let webEngineError = false
   let aggregatesUnreliable = false
   const fail = (m: string) => { t0.push(`- ✗ ${m}  **(HARD — verdict INVALID)**`); invalid = true }
+  const errFail = (m: string) => { t0.push(`- ✗ ${m}  **(HARD — verdict ERROR; pitch verdict not formed)**`); webEngineError = true }
   const soft = (m: string) => { t0.push(`- ⚠ ${m}  **(SOFT — Tier 3 + 1.3 unreliable; Tier 1 pitch still valid)**`); aggregatesUnreliable = true }
   const passG = (m: string) => t0.push(`- ✓ ${m}`)
+  // #371: engine errors are a Tier-0 outcome distinct from INVALID (no WAV) /
+  // TOOL-FAIL (capture pipeline) / DIVERGE (audio differs). Without this gate
+  // an example whose web engine throws mid-run is misattributed to a parity
+  // bug — silent or partial audio after the throw scores as DIVERGE at note 0.
+  // Runs BEFORE the no-WAV checks so an error+empty-WAV reads as ERROR (root
+  // cause: the throw), not generic INVALID.
+  if (r.web.errors.length > 0) {
+    const first = r.web.errors[0].replace(/\s+/g, ' ').slice(0, 140)
+    const extra = r.web.errors.length > 1 ? ` (+${r.web.errors.length - 1} more)` : ''
+    errFail(`Web engine error during capture: ${first}${extra} — see "Web engine errors" below`)
+  }
   if (!dStats) fail('Desktop produced no WAV — see desktop tool stdout below')
   if (!wStats) {
     // #358: distinguish capture-tool failure (TOOL-FAIL) from engine silence.
@@ -296,12 +314,15 @@ function writeComparisonReport(r: ComparisonResult): void {
     // random walk" — musically equivalent, not a bug. Demoting separates the
     // ~34 PRNG-noise rows from real parity bugs in the sweep dashboard.
     //
-    // Requires ALL FOUR uncorrelated signals to coincide (conservative — a
-    // false positive needs a 4-way coincidence):
+    // Signature (the pitch-class histogram cosine carries the verdict;
+    // #367 — count parity does NOT, a different random walk legitimately
+    // changes note count):
     //   1. source contains a PRNG token (PRNG_RE)
-    //   2. unique note-set identical on both sides (scale/bank match)
+    //   2. pitch-class histogram cosine ≥ 0.92 (permutation-invariant —
+    //      a shuffle preserves it; a real bug shifts it substantially)
     //   3. tempo matches (tempoOk, <10% inter-onset delta)
-    //   4. onset count within ±15%
+    //   4. density floor: onset-count ratio ≥ 0.5 (guards only against a
+    //      degenerate near-empty capture, not against count divergence)
     const PRNG_RE = /\b(rrand|rrand_i|rand|rand_i|\.choose|\.shuffle|\.pick|one_in|dice|use_random_seed)\b/
     let prngVariant = false
     let prngCos = 0
@@ -328,16 +349,33 @@ function writeComparisonReport(r: ComparisonResult): void {
       for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i] }
       return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0
     }
-    if (mismatch >= 0 && !inconc && n > 0 && tempoOk && PRNG_RE.test(r.code)) {
+    // Onset-count ratio. A different random walk of the SAME composition
+    // legitimately changes note durations/rests and therefore onset count
+    // (#367) — so this is NOT an equality test. It has two distinct uses:
+    //   • Gross mismatch (<0.3) on same-method `onset` tracks ⇒ the onset
+    //     detector is unreliable on ≥1 side (slewed / long-release / sustained
+    //     material hallucinates onsets from continuous spectral motion, e.g.
+    //     tron_bike: desktop 83 vs web 6 for a ~2-note/15s live_loop). The
+    //     measurement cannot judge this material ⇒ INCONCLUSIVE, NOT a hard
+    //     DIVERGE (#368). Honest degradation, not a false engine-failure.
+    //   • PRNG-VARIANT needs only a loose density floor; the pitch-class
+    //     histogram cosine carries the verdict, not count parity. Requiring
+    //     count parity from a "different random walk" contradicts the
+    //     premise — it is why #366 fired on only 1/34 (#367).
+    const countRatio = Math.max(dp.count, wp.count) > 0
+      ? Math.min(dp.count, wp.count) / Math.max(dp.count, wp.count) : 1
+    const bothOnset = dp.method === 'onset' && wp.method === 'onset'
+    const onsetUnreliable = mismatch >= 0 && !inconc && n > 0 && bothOnset && countRatio < 0.3
+    if (mismatch >= 0 && !inconc && n > 0 && !onsetUnreliable && tempoOk && PRNG_RE.test(r.code)) {
       prngCos = cosine(pcHist(dSeq.slice(0, n)), pcHist(wSeq.slice(0, n)))
-      const countRatio = Math.min(dp.count, wp.count) / Math.max(dp.count, wp.count)
-      if (prngCos >= 0.92 && countRatio >= 0.85) prngVariant = true
+      if (prngCos >= 0.92 && countRatio >= 0.5) prngVariant = true
     }
     if (inconc) pitchVerdict = `⚠ INCONCLUSIVE — contour-low confidence (desktop ${dp.method}/${dp.confidence}, web ${wp.method}/${wp.confidence}); sustained/noisy material, no Tier-1 verdict`
     else if (n === 0) pitchVerdict = '⚠ no notes detected on one/both sides'
     else if (mismatch < 0) pitchVerdict = `✓ PITCH-MATCH — ${unit} identical over ${n}`
+    else if (onsetUnreliable) pitchVerdict = `⚠ INCONCLUSIVE — onset detector unreliable: gross density mismatch (desktop ${dp.count} vs web ${wp.count} onsets, ratio ${countRatio.toFixed(2)} < 0.3) on slewed/sustained material; onset method cannot judge this — no Tier-1 verdict (#368)`
     else if (prngVariant) {
-      pitchVerdict = `≈ pitch-class histogram cos=${prngCos.toFixed(3)} (≥0.92), tempo match, count within ±15%, PRNG token in source; same composition, different random walk (cross-engine seed parity is not a v1 goal — #358/#364)`
+      pitchVerdict = `≈ pitch-class histogram cos=${prngCos.toFixed(3)} (≥0.92), tempo match, density ratio ${countRatio.toFixed(2)} (≥0.5), PRNG token in source; same composition, different random walk (cross-engine seed parity is not a v1 goal — #358/#364/#367)`
     }
     else pitchVerdict = `✗ PITCH DIVERGENCE at ${pcMode ? 'pc' : 'note'} ${mismatch} (desktop ${dSeq[mismatch]} vs web ${wSeq[mismatch]})`
     t1.push(`- **1.1 Note progression:** ${pitchVerdict}`)
@@ -354,7 +392,14 @@ function writeComparisonReport(r: ComparisonResult): void {
   // Headline verdict
   const softNote = aggregatesUnreliable ? '  · ⚠ Tier-0 SOFT: level/count aggregates unreliable (Tier 1 pitch unaffected)' : ''
   lines.push('## Verdict')
-  if (invalid) {
+  if (webEngineError) {
+    // #371: ERROR ranks above INVALID — when the web engine threw, the WAV
+    // (if any) is a partial render and the pitch sequence is meaningless. The
+    // root cause is the throw, not a parity gap. INVALID would let the reader
+    // chase the wrong question.
+    const summary = r.web.errors[0].replace(/\s+/g, ' ').slice(0, 200)
+    lines.push(`### ❌ ERROR — Web engine threw during capture; pitch verdict not formed. \`${summary}\``)
+  } else if (invalid) {
     lines.push(`### ❌ INVALID — Tier 0 HARD gate failed. The pitch sequence itself is unreliable; no verdict until fixed.`)
   } else if (pitchVerdict.startsWith('✓')) {
     lines.push(`### ✅ Tier 1 ${pitchVerdict}  (the musical-correctness verdict)${softNote}`)
@@ -369,6 +414,13 @@ function writeComparisonReport(r: ComparisonResult): void {
   lines.push('### Tier 0 — Validity gates')
   for (const v of t0) lines.push(v)
   lines.push('')
+  if (r.web.errors.length > 0) {
+    // #371: surface the full error list — triage is one-click without having
+    // to chase the capture report file.
+    lines.push('### Web engine errors (Tier-0 ERROR root cause)')
+    for (const e of r.web.errors) lines.push(`- ${e}`)
+    lines.push('')
+  }
   lines.push('### Tier 1 — Musical correctness (THE verdict — energy/MFCC may never override)')
   for (const v of t1) lines.push(v)
   lines.push('')
@@ -535,6 +587,7 @@ async function main(): Promise<void> {
   // Distinguishing the two lets the Tier-0 line say TOOL-FAIL vs ENGINE-SILENT.
   let webWav: string | null = null
   let webToolFailReason: string | null = null
+  let webErrors: string[] = []
   const webReportMatch = web.stdout.match(/Capture saved:\s+(\S+\.md)/)
   if (webReportMatch && existsSync(webReportMatch[1])) {
     const md = readFileSync(webReportMatch[1], 'utf8')
@@ -544,6 +597,20 @@ async function main(): Promise<void> {
     } else {
       const sentinel = md.match(/\*\*File:\*\*\s+none\s+—\s+(.+)$/m)
       if (sentinel) webToolFailReason = sentinel[1].trim()
+    }
+    // #371: extract the `## Errors` section. capture.ts always emits it
+    // (`None.` when empty); a non-empty list means the engine threw / a
+    // runtime-pattern (SyntaxError/TypeError/"not a function"/"Error in
+    // loop"/…) appeared in the App Console. Bullets `- [pageerror @ …] …`,
+    // `- [console.error @ …] …`, `- [network …] …`, `- [app console] …`.
+    const errSection = md.match(/^## Errors\s*\n([\s\S]*?)(?=\n## |\n*$)/m)
+    if (errSection) {
+      const body = errSection[1].trim()
+      if (body && body !== 'None.') {
+        webErrors = body.split('\n')
+          .map(l => l.replace(/^[-*]\s+/, '').trim())
+          .filter(l => l.length > 0 && l !== 'None.')
+      }
     }
   }
 
@@ -613,7 +680,7 @@ async function main(): Promise<void> {
     duration: args.duration,
     name: args.name,
     desktop: { wavPath: desktopWav, stats: desktopStats, rawStdout: desktop.stdout, ok: desktop.exitCode === 0, pitch: desktopPitch },
-    web:     { wavPath: webWav,     stats: webStats,     rawStdout: web.stdout,     ok: web.exitCode === 0, pitch: webPitch, toolFailReason: webToolFailReason },
+    web:     { wavPath: webWav,     stats: webStats,     rawStdout: web.stdout,     ok: web.exitCode === 0, pitch: webPitch, toolFailReason: webToolFailReason, errors: webErrors },
     spectrogram,
     spectrogramError,
     reportPath,

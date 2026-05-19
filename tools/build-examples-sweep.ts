@@ -64,7 +64,7 @@ interface SweepRow {
   category: string
   example: string
   path: string
-  verdict: 'match' | 'diverge' | 'prng-variant' | 'invalid' | 'inconcl'
+  verdict: 'match' | 'diverge' | 'prng-variant' | 'invalid' | 'inconcl' | 'error'
   verdictRaw: string
   tempoDesktop: number | null
   tempoWeb: number | null
@@ -145,7 +145,10 @@ function parseReport(reportPath: string): Partial<SweepRow> {
   const verdictLine = md.match(/^###\s+(.+)$/m)
   if (verdictLine) {
     row.verdictRaw = verdictLine[1].trim()
-    if (/PRNG-VARIANT/.test(row.verdictRaw)) row.verdict = 'prng-variant'
+    // #371: match ERROR before INVALID — the ERROR header contains "❌" too,
+    // and the ERROR root cause must NOT be re-bucketed as a generic INVALID.
+    if (/^❌ ERROR\b/.test(row.verdictRaw) || /\bERROR\b — Web engine threw/.test(row.verdictRaw)) row.verdict = 'error'
+    else if (/PRNG-VARIANT/.test(row.verdictRaw)) row.verdict = 'prng-variant'
     else if (/PITCH-MATCH/.test(row.verdictRaw)) row.verdict = 'match'
     else if (/PITCH DIVERGENCE/.test(row.verdictRaw)) {
       row.verdict = 'diverge'
@@ -321,6 +324,9 @@ for (const examplePath of EXAMPLES) {
     artifacts: { snippet: null, desktopWav: null, webWav: null, spectrogramPng: null, report: null },
   }
   // PRNG-free real divergence: DIVERGE + no PRNG
+  // PRNG-free real divergences = engine bugs in non-random examples — the
+  // actionable backlog. ERROR rows are root-caused by a throw, not parity;
+  // they belong to their own bucket (#371) and must NOT inflate the backlog.
   if (row.verdict === 'diverge' && !row.prng) row.prngFreeReal = true
 
   // Copy artifacts into test_results/examples-sweep/<slug>/
@@ -365,6 +371,7 @@ const counts = {
   prngVariant: rows.filter(r => r.verdict === 'prng-variant').length,
   invalid: rows.filter(r => r.verdict === 'invalid').length,
   inconcl: rows.filter(r => r.verdict === 'inconcl').length,
+  error: rows.filter(r => r.verdict === 'error').length,
   prng: rows.filter(r => r.prng).length,
   prngFreeReal: rows.filter(r => r.prngFreeReal).length,
   heavy: rows.filter(r => r.heavy).length,
@@ -384,7 +391,7 @@ const manifest = {
 writeFileSync(OUT_JSON, JSON.stringify(manifest, null, 2))
 
 console.log(`✓ Built ${rows.length} entries → ${OUT_JSON}`)
-console.log(`  match=${counts.match} · prng-variant=${counts.prngVariant} · diverge=${counts.diverge} · invalid=${counts.invalid} · inconcl=${counts.inconcl}`)
+console.log(`  match=${counts.match} · prng-variant=${counts.prngVariant} · diverge=${counts.diverge} · invalid=${counts.invalid} · inconcl=${counts.inconcl} · error=${counts.error}`)
 console.log(`  PRNG-driven=${counts.prng} · PRNG-free real divergences=${counts.prngFreeReal} (the actionable backlog) · heavy-tool-fail=${counts.heavy}`)
 const missingDesk = rows.filter(r => !r.artifacts.desktopWav).length
 const missingWeb = rows.filter(r => !r.artifacts.webWav).length
