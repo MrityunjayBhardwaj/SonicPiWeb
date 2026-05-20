@@ -365,8 +365,22 @@ function writeComparisonReport(r: ComparisonResult): void {
     const countRatio = Math.max(dp.count, wp.count) > 0
       ? Math.min(dp.count, wp.count) / Math.max(dp.count, wp.count) : 1
     const bothOnset = dp.method === 'onset' && wp.method === 'onset'
+    const bothContour = dp.method === 'contour' && wp.method === 'contour'
     const onsetUnreliable = mismatch >= 0 && !inconc && n > 0 && bothOnset && countRatio < 0.3
-    if (mismatch >= 0 && !inconc && n > 0 && !onsetUnreliable && tempoOk && PRNG_RE.test(r.code)) {
+    // #374: contour pitch-tracker cannot reliably ORDER polyphonic chord
+    // arpeggios. When source contains `play_chord` and both sides fell back
+    // to contour mode, the reported sequences are full of pitch-classes
+    // OUT of the expected chord set on BOTH sides (the tracker picks
+    // different overtones / chord-members at different onsets). Same class
+    // as #368 (onset-tracker on slewed material) — different material,
+    // different mode. Verified empirically on `chord_inversions.rb` post
+    // #372 fix: engine math provably desktop-correct (monophonic Level-3
+    // walk: ✓ PITCH-MATCH 15/15 conf 1 both sides), yet the polyphonic
+    // reproducer reports out-of-set noise on both sides with conf ~0.9.
+    // Triggers INCONCL not DIVERGE — measurement honest about its limit.
+    const polyphonic = /\bplay_chord\b/.test(r.code)
+    const polyphonicUnreliable = mismatch >= 0 && !inconc && n > 0 && polyphonic && bothContour
+    if (mismatch >= 0 && !inconc && n > 0 && !onsetUnreliable && !polyphonicUnreliable && tempoOk && PRNG_RE.test(r.code)) {
       prngCos = cosine(pcHist(dSeq.slice(0, n)), pcHist(wSeq.slice(0, n)))
       if (prngCos >= 0.92 && countRatio >= 0.5) prngVariant = true
     }
@@ -374,6 +388,7 @@ function writeComparisonReport(r: ComparisonResult): void {
     else if (n === 0) pitchVerdict = '⚠ no notes detected on one/both sides'
     else if (mismatch < 0) pitchVerdict = `✓ PITCH-MATCH — ${unit} identical over ${n}`
     else if (onsetUnreliable) pitchVerdict = `⚠ INCONCLUSIVE — onset detector unreliable: gross density mismatch (desktop ${dp.count} vs web ${wp.count} onsets, ratio ${countRatio.toFixed(2)} < 0.3) on slewed/sustained material; onset method cannot judge this — no Tier-1 verdict (#368)`
+    else if (polyphonicUnreliable) pitchVerdict = `⚠ INCONCLUSIVE — polyphonic material (play_chord) judged via contour pitch-tracker; ordering reported on both sides contains pitch-classes outside any single chord (overtone/chord-member picking) — contour method cannot judge polyphonic-chord arpeggios reliably — no Tier-1 verdict (#374; for engine verification use an instrument-friendly monophonic reproducer)`
     else if (prngVariant) {
       pitchVerdict = `≈ pitch-class histogram cos=${prngCos.toFixed(3)} (≥0.92), tempo match, density ratio ${countRatio.toFixed(2)} (≥0.5), PRNG token in source; same composition, different random walk (cross-engine seed parity is not a v1 goal — #358/#364/#367)`
     }
