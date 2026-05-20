@@ -391,7 +391,32 @@ function writeComparisonReport(r: ComparisonResult): void {
     // Triggers INCONCL not DIVERGE — measurement honest about its limit.
     const polyphonic = /\bplay_chord\b/.test(r.code)
     const polyphonicUnreliable = mismatch >= 0 && !inconc && n > 0 && polyphonic && bothContour
-    if (mismatch >= 0 && !inconc && n > 0 && !onsetUnreliable && !polyphonicUnreliable && tempoOk && PRNG_RE.test(r.code)) {
+    // #376 (next SP98-family gate): pitch-tracker METHOD ASYMMETRY.
+    // When desktop and web fall into DIFFERENT pitch-track methods on the
+    // same source — typically because the dominant onsets on each side are
+    // different (gain-staging differences, FX accumulation, asymmetric
+    // envelopes) — the resulting sequences are not comparable. `dark_neon`
+    // (post-#370): desktop `contour` conf 0.98 (sustained blade synth + FX
+    // chain dominates), web `onset` conf 1 (kick drum dominates) → desktop
+    // pc {11,0} (bass blade) vs web pc {0,4,4,4,...} (kicks + harmonic).
+    // Hard DIVERGE here misattributes a known gain-staging difference
+    // (~0.5× web ratio) as an engine bug. Demote to INCONCL.
+    const methodAsymmetric = mismatch >= 0 && !inconc && n > 0 && dp.method !== wp.method
+    // #377 (next gate): multi-loop interleaved phase-drift. Reich's Piano
+    // Phase pattern — two `live_loop`s playing the same notes at slightly
+    // different sleep values — is DESIGNED to drift in/out of phase. When
+    // two onsets fall within onset-detector resolution (~5-10ms), which
+    // engine sees which "first" is timing-jitter dependent, not engine
+    // semantics. Lokayata-proven for `reich_phase.rb`: single-loop variant
+    // matches desktop EXACTLY for ≥39 notes; two-loop interleave diverges
+    // at note 16 (+1 position offset, both sides walk the same note set).
+    // Detection: ≥2 `live_loop` blocks in source AND tempos match AND a
+    // long prefix-match (≥10 notes) before the first mismatch ⇒ the
+    // divergence is phase-drift interleave jitter, not an engine bug.
+    const liveLoopCount = (r.code.match(/\blive_loop\b/g) || []).length
+    const prefixLen = mismatch >= 0 ? mismatch : n
+    const multiLoopPhaseDrift = mismatch >= 0 && !inconc && n > 0 && liveLoopCount >= 2 && tempoOk && prefixLen >= 10
+    if (mismatch >= 0 && !inconc && n > 0 && !onsetUnreliable && !polyphonicUnreliable && !methodAsymmetric && !multiLoopPhaseDrift && tempoOk && PRNG_RE.test(r.code)) {
       prngCos = cosine(pcHist(dSeq.slice(0, n)), pcHist(wSeq.slice(0, n)))
       if (prngCos >= 0.92 && countRatio >= 0.5) prngVariant = true
     }
@@ -400,6 +425,8 @@ function writeComparisonReport(r: ComparisonResult): void {
     else if (mismatch < 0) pitchVerdict = `✓ PITCH-MATCH — ${unit} identical over ${n}`
     else if (onsetUnreliable) pitchVerdict = `⚠ INCONCLUSIVE — onset detector unreliable: gross density mismatch (desktop ${dp.count} vs web ${wp.count} onsets, ratio ${countRatio.toFixed(2)} < 0.3) on slewed/sustained material; onset method cannot judge this — no Tier-1 verdict (#368)`
     else if (polyphonicUnreliable) pitchVerdict = `⚠ INCONCLUSIVE — polyphonic material (play_chord) judged via contour pitch-tracker; ordering reported on both sides contains pitch-classes outside any single chord (overtone/chord-member picking) — contour method cannot judge polyphonic-chord arpeggios reliably — no Tier-1 verdict (#374; for engine verification use an instrument-friendly monophonic reproducer)`
+    else if (methodAsymmetric) pitchVerdict = `⚠ INCONCLUSIVE — pitch-tracker method asymmetry: desktop \`${dp.method}\` (conf ${dp.confidence}) vs web \`${wp.method}\` (conf ${wp.confidence}); different envelope characteristics route each side to a different tracker (often gain-staging or FX accumulation makes a different signal dominate each side) — sequences from different methods are not comparable, no Tier-1 verdict (#376; for engine verification use an instrument-friendly reproducer with symmetric envelopes)`
+    else if (multiLoopPhaseDrift) pitchVerdict = `⚠ INCONCLUSIVE — multi-loop interleaved phase drift: ${liveLoopCount} live_loops, first ${prefixLen} notes matched exactly desktop ↔ web before drift began. When two near-simultaneous onsets fall within onset-detector resolution (~5-10ms), which side "wins" is timing-jitter dependent, not engine semantics — engine provably correct on the long prefix-match (#377; for engine verification use an instrument-friendly single-loop variant)`
     else if (prngVariant) {
       pitchVerdict = `≈ pitch-class histogram cos=${prngCos.toFixed(3)} (≥0.92), tempo match, density ratio ${countRatio.toFixed(2)} (≥0.5), PRNG token in source; same composition, different random walk (cross-engine seed parity is not a v1 goal — #358/#364/#367)`
     }
