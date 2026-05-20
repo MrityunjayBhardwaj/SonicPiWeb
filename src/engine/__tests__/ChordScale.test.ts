@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { chord, scale, chord_invert, note, note_range } from '../ChordScale'
+import { chord, scale, chord_invert, chord_degree, note, note_range } from '../ChordScale'
 
 describe('chord', () => {
   it('major chord from C4', () => {
@@ -95,6 +95,8 @@ describe('scale', () => {
 })
 
 describe('chord_invert', () => {
+  // All assertions match desktop SP `lib/sonicpi/lang/western_theory.rb:1053-1064`.
+
   it('first inversion of C major', () => {
     const c = chord('c4', 'major')
     expect(chord_invert(c, 1).toArray()).toEqual([64, 67, 72])
@@ -112,6 +114,59 @@ describe('chord_invert', () => {
 
   it('works with plain arrays', () => {
     expect(chord_invert([60, 64, 67], 1).toArray()).toEqual([64, 67, 72])
+  })
+
+  // #372: negative-shift cases. Desktop: `(notes[0..-2] + [notes[-1]-12]).sort`.
+  // Pre-fix our impl coerced negatives to positive remainders and produced
+  // the wrong notes (e.g. chord_invert([60,64,67], -1) returned [67,72,76]).
+  it('negative inversion (-1) of C major', () => {
+    // Desktop: pop 67, push 67-12=55, sort → [55, 60, 64]
+    expect(chord_invert([60, 64, 67], -1).toArray()).toEqual([55, 60, 64])
+  })
+
+  it('negative inversion (-2) of C major', () => {
+    // Desktop chained: shift=-2 → [55,60,64], shift=-1 → [52,55,60]
+    expect(chord_invert([60, 64, 67], -2).toArray()).toEqual([52, 55, 60])
+  })
+
+  it('negative inversion (-3) of C major', () => {
+    // Three iterations of pop-last/−12/sort
+    expect(chord_invert([60, 64, 67], -3).toArray()).toEqual([48, 52, 55])
+  })
+
+  // Ground-truth regression test from desktop's own docstring example —
+  // `western_theory.rb:1078`: "play (chord_invert (chord :A3, "M"), 0)
+  //   #No inversion - (ring 57, 61, 64)".
+  it('matches desktop docstring: chord_invert(chord(:a3, "M"), 0) → [57,61,64]', () => {
+    expect(chord_invert(chord('a3', 'major'), 0).toArray()).toEqual([57, 61, 64])
+  })
+
+  it('rounds non-integer shift (matches desktop shift.round)', () => {
+    expect(chord_invert([60, 64, 67], 0.6).toArray()).toEqual([64, 67, 72]) // 0.6 → 1
+    expect(chord_invert([60, 64, 67], -0.6).toArray()).toEqual([55, 60, 64]) // -0.6 → -1
+  })
+})
+
+describe('chord_degree with invert: opt (#372)', () => {
+  // Desktop `western_theory.rb:904`:
+  //   chord_invert(Chord.resolve_degree(degree, tonic, scale, number_of_notes), opts[:invert]).ring
+  it('invert: 0 returns the un-inverted chord (sorted)', () => {
+    expect(chord_degree('i', 'c4', 'major', 3, { invert: 0 }).toArray()).toEqual([60, 64, 67])
+  })
+
+  it('matches desktop docstring example: chord_degree(:i, :C, :major, 3, invert: 1) → [64, 67, 72]', () => {
+    // Desktop docstring at `western_theory.rb:922`:
+    //   "play (chord_degree :i, :C4, :major, 3, invert: 1) # Play the first
+    //   inversion of chord i in C major - (ring 64, 67, 72)"
+    expect(chord_degree('i', 'c4', 'major', 3, { invert: 1 }).toArray()).toEqual([64, 67, 72])
+  })
+
+  it('invert: -1 on triad threads negative shift through chord_invert', () => {
+    expect(chord_degree('i', 'c4', 'major', 3, { invert: -1 }).toArray()).toEqual([55, 60, 64])
+  })
+
+  it('without invert: opt, default still gives 4-note Cmaj7 (#355 Part A)', () => {
+    expect(chord_degree('i', 'c4', 'major').toArray()).toEqual([60, 64, 67, 71])
   })
 })
 

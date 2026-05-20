@@ -241,19 +241,36 @@ export function scale(root: string | number, type: string = 'major', numOctavesO
 }
 
 /**
- * Invert a chord by shifting the lowest N notes up an octave.
+ * Invert a chord. Positive shift rotates the lowest note up an octave;
+ * negative shift rotates the highest note down an octave. The result is
+ * always returned sorted ascending.
  *
- * chord_invert(chord(:c4, :major), 1) → [64, 67, 72]
+ * chord_invert(chord(:c4, :major),  1) → ring(64, 67, 72)
+ * chord_invert(chord(:c4, :major), -1) → ring(55, 60, 64)
+ *
+ * Matches desktop SP `lib/sonicpi/lang/western_theory.rb:1053-1064` exactly,
+ * including the final `.sort` (line 1062). Previously our implementation
+ * coerced negative shifts to positive remainders and skipped the sort,
+ * producing the wrong notes for negative inversions and any case where
+ * rotation broke sorted-ascending order. (#372)
  */
 export function chord_invert(notes: Ring<number> | number[], inversion: number): Ring<number> {
-  const arr = Array.isArray(notes) ? [...notes] : notes.toArray()
-
-  let inv = ((inversion % arr.length) + arr.length) % arr.length
-  for (let i = 0; i < inv; i++) {
+  let arr = Array.isArray(notes) ? [...notes] : notes.toArray()
+  let shift = Math.round(inversion)
+  while (shift > 0) {
+    // desktop: notes[1..-1] + [notes[0]+12]
     const lowest = arr.shift()!
     arr.push(lowest + 12)
+    shift -= 1
   }
-
+  while (shift < 0) {
+    // desktop: (notes[0..-2] + [notes[-1]-12]).sort
+    const highest = arr.pop()!
+    arr.push(highest - 12)
+    arr.sort((a, b) => a - b)
+    shift += 1
+  }
+  arr.sort((a, b) => a - b)  // desktop `notes.ring.sort` at line 1062
   return new Ring(arr)
 }
 
@@ -288,8 +305,9 @@ export function note_range(low: string | number, high: string | number): Ring<nu
 /**
  * Return the chord built on the Nth degree of a scale.
  *
- * chord_degree(:i, :c4, :major)  → ring(60, 64, 67, 71)   # C maj 7
- * chord_degree(:i, :a3, :major)  → ring(57, 61, 64, 68)   # A maj 7
+ * chord_degree(:i, :c4, :major)              → ring(60, 64, 67, 71)   # C maj 7
+ * chord_degree(:i, :a3, :major)              → ring(57, 61, 64, 68)   # A maj 7
+ * chord_degree(:i, :c4, :major, 3, {invert:1}) → ring(64, 67, 72)     # 1st inv
  *
  * Sonic Pi uses Roman numeral symbols (:i through :vii).
  * We also accept 1-based integer degrees for convenience.
@@ -299,12 +317,18 @@ export function note_range(low: string | number, high: string | number): Ring<nu
  * desktop docstring line 920: "Taking four notes is the default. This gives
  * us 7th chords - here it plays a C major 7." Pass an explicit `3` to get
  * triads. (#355)
+ *
+ * Accepts an `opts` hash with `invert: N` matching desktop line 904:
+ *   `chord_invert(Chord.resolve_degree(...), opts[:invert]).ring`
+ * Without this, snippets like `chord_degree d, :c, :major, 3, invert: i`
+ * (chord_inversions.rb) silently dropped the kwarg. (#372)
  */
 export function chord_degree(
   degreeVal: string | number,
   root: string | number,
   scaleType: string = 'major',
-  chordNumNotes: number = 4
+  chordNumNotes: number = 4,
+  opts: { invert?: number } = {}
 ): Ring<number> {
   const idx = parseDegree(degreeVal)
   const scaleNotes = scale(root, scaleType)
@@ -321,6 +345,12 @@ export function chord_degree(
     const degIdx = (idx + i * 2) % len
     const octOffset = Math.floor((idx + i * 2) / len) * 12
     notes.push(noteToMidi(root) + scaleIntervals[degIdx] + octOffset)
+  }
+  // #372: thread invert: opt through chord_invert, matching desktop line 904.
+  // `if(opts[:invert])` in Ruby treats `nil` and `false` as falsy and any
+  // numeric (including 0) as truthy. We match: only skip when undefined/null.
+  if (opts.invert !== undefined && opts.invert !== null) {
+    return chord_invert(notes, opts.invert)
   }
   return new Ring(notes)
 }
