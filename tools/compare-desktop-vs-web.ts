@@ -323,7 +323,18 @@ function writeComparisonReport(r: ComparisonResult): void {
     //   3. tempo matches (tempoOk, <10% inter-onset delta)
     //   4. density floor: onset-count ratio ≥ 0.5 (guards only against a
     //      degenerate near-empty capture, not against count divergence)
-    const PRNG_RE = /\b(rrand|rrand_i|rand|rand_i|\.choose|\.shuffle|\.pick|one_in|dice|use_random_seed)\b/
+    // #375 (regex bug): the original `/\b(rrand|...|\.choose|\.shuffle|\.pick|...)\b/`
+    // silently missed `[1,2,3].choose` and `(scale).shuffle` — `\b` before `.`
+    // requires a word-boundary transition that doesn't exist between `]`/`)`
+    // and `.`. It also missed Ruby's function-call form `choose([1,2,3])` /
+    // `shuffle(...)` / `pick(...)` entirely. 4 of the "8 PRNG-free actionable
+    // engine bugs" in the post-#370 sweep (blockgame, ambient_experiment,
+    // rerezzed, time_machine) were actually cross-engine-PRNG rows mis-routed.
+    // Three call-shapes the corrected regex covers:
+    //   1. bare word: rrand / rrand_i / rand / rand_i / one_in / dice / use_random_seed
+    //   2. dot-method: .choose / .shuffle / .pick   (any expression)
+    //   3. fn-call:    choose( / shuffle( / pick(    (Ruby's function form)
+    const PRNG_RE = /(\b(?:rrand|rrand_i|rand|rand_i|one_in|dice|use_random_seed)\b|\.(?:choose|shuffle|pick)\b|\b(?:choose|shuffle|pick)\s*\()/
     let prngVariant = false
     let prngCos = 0
     // Observation (Lokayata): exact note-SET equality is too brittle. Pitch

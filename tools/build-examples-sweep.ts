@@ -55,8 +55,19 @@ const OUT_DIR = resolve(ROOT, 'test_results', ROSTER.outDirName)
 const OUT_JSON = resolve(ROOT, 'test_results', ROSTER.outJsonName)
 console.log(`[build] roster='${rosterName}' src='${EXAMPLES_DIR}' → ${OUT_JSON}`)
 
-// PRNG-indicating identifiers in user code → classifies row as PRNG-driven
-const PRNG_RE = /\b(rrand|rrand_i|rand|rand_i|\.choose|\.shuffle|\.pick|one_in|dice|use_random_seed)\b/
+// PRNG-indicating identifiers in user code → classifies row as PRNG-driven.
+// Must stay IN SYNC with the same regex in `tools/compare-desktop-vs-web.ts`.
+// The original `/\b(...|\.choose|\.shuffle|...)\b/` was buggy: (a) `\b\.choose`
+// requires a word boundary before `.` which doesn't exist when `.choose`
+// follows `]` or `)`, so `[1,2].choose` and `(x).shuffle` were missed
+// entirely; (b) it had no support for Ruby's function-call form
+// `choose([1,2])`/`shuffle(...)`/`pick(...)`. Net effect: 4 of the post-#370
+// sweep's "8 PRNG-free actionable engine bugs" were mis-routed cross-engine-
+// PRNG rows. Three call-shapes the corrected regex covers:
+//   1. bare word:  rrand / rrand_i / rand / rand_i / one_in / dice / use_random_seed
+//   2. dot-method: .choose / .shuffle / .pick   (any expression)
+//   3. fn-call:    choose( / shuffle( / pick(    (Ruby's function form)
+const PRNG_RE = /(\b(?:rrand|rrand_i|rand|rand_i|one_in|dice|use_random_seed)\b|\.(?:choose|shuffle|pick)\b|\b(?:choose|shuffle|pick)\s*\()/
 
 interface SweepRow {
   n: number
