@@ -33,38 +33,44 @@ describe('hzToMidi', () => {
 // ---------------------------------------------------------------------------
 
 describe('chord_degree', () => {
-  it('degree :i of C major → C major triad', () => {
+  // Default chord size is 4 (diatonic 7th chord) per desktop Sonic Pi
+  // `lib/sonicpi/lang/western_theory.rb:900` `number_of_notes=4`. #355.
+  it('degree :i of C major → C maj 7 chord (default = 4 notes)', () => {
     const notes = chord_degree('i', 'c4', 'major').toArray()
-    expect(notes).toEqual([60, 64, 67]) // C E G
+    expect(notes).toEqual([60, 64, 67, 71]) // C E G B
   })
 
-  it('degree :ii of C major → D minor triad', () => {
+  it('degree :ii of C major → D min 7 chord (default = 4 notes)', () => {
     const notes = chord_degree('ii', 'c4', 'major').toArray()
-    expect(notes).toEqual([62, 65, 69]) // D F A
+    expect(notes).toEqual([62, 65, 69, 72]) // D F A C
   })
 
-  it('degree :v of C major → G major triad', () => {
+  it('degree :v of C major → G dominant 7 chord (default = 4 notes)', () => {
     const notes = chord_degree('v', 'c4', 'major').toArray()
-    expect(notes).toEqual([67, 71, 74]) // G B D (stacked thirds from 5th degree)
+    expect(notes).toEqual([67, 71, 74, 77]) // G B D F (stacked thirds from 5th degree)
   })
 
   it('accepts integer degrees (1-based)', () => {
     const notes = chord_degree(1, 'c4', 'major').toArray()
-    expect(notes).toEqual([60, 64, 67])
+    expect(notes).toEqual([60, 64, 67, 71])
   })
 
-  it('4-note chords', () => {
-    const notes = chord_degree('i', 'c4', 'major', 4).toArray()
-    expect(notes.length).toBe(4)
-    expect(notes[0]).toBe(60) // C
-    expect(notes[1]).toBe(64) // E
-    expect(notes[2]).toBe(67) // G
-    expect(notes[3]).toBe(71) // B
+  // Ground-truth regression test from desktop SP's own docstring example —
+  // `western_theory.rb:915`: "puts (chord_degree :i, :A3, :major) # returns
+  // a ring of midi notes - (ring 57, 61, 64, 68) - an A major 7 chord".
+  it('matches desktop docstring example: chord_degree(:i, :a3, :major) → A maj 7', () => {
+    const notes = chord_degree('i', 'a3', 'major').toArray()
+    expect(notes).toEqual([57, 61, 64, 68]) // A C# E G#
+  })
+
+  it('explicit triad: chord_degree(:i, :c4, :major, 3) still gives 3-note C major', () => {
+    const notes = chord_degree('i', 'c4', 'major', 3).toArray()
+    expect(notes).toEqual([60, 64, 67]) // C E G — override still works
   })
 
   it('returns a Ring', () => {
     const r = chord_degree('i', 'c4', 'major')
-    expect(r.at(3)).toBe(60) // wraps
+    expect(r.at(4)).toBe(60) // wraps (ring length is now 4)
   })
 })
 
@@ -176,7 +182,7 @@ describe('ProgramBuilder Wave 1', () => {
   it('chord_degree is accessible on builder', () => {
     const b = new ProgramBuilder()
     const notes = b.chord_degree('i', 'c4', 'major')
-    expect(notes.toArray()).toEqual([60, 64, 67])
+    expect(notes.toArray()).toEqual([60, 64, 67, 71]) // Cmaj7 (default 4 — #355)
   })
 
   it('degree is accessible on builder', () => {

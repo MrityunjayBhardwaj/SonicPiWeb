@@ -125,7 +125,9 @@ describe('Wave 1 DSL Integration (Ruby → engine)', () => {
     expect(notes[2].note).toBe(67)  // G4
   })
 
-  it('chord_degree returns chord at scale degree (3 simultaneous notes)', async () => {
+  it('chord_degree returns chord at scale degree (4 simultaneous notes — Cmaj7 by default)', async () => {
+    // Default chord size = 4 (diatonic 7th chord) per desktop SP
+    // `western_theory.rb:900` `number_of_notes=4`. #355.
     const { events, error } = await evalAndQuery(`
       live_loop :test do
         play chord_degree(:i, :c4, :major)
@@ -134,9 +136,9 @@ describe('Wave 1 DSL Integration (Ruby → engine)', () => {
     `, 0.99)
     expect(error).toBeUndefined()
     const notes = synthNotes(events)
-    expect(notes.length).toBe(3)
+    expect(notes.length).toBe(4)
     const midiNotes = notes.map((n) => n.note).sort((a, b) => a - b)
-    expect(midiNotes).toEqual([60, 64, 67])  // C E G
+    expect(midiNotes).toEqual([60, 64, 67, 71])  // C E G B
   })
 
   it('octs generates octave-spaced notes', async () => {
@@ -187,8 +189,8 @@ describe('Wave 1 DSL Integration (Ruby → engine)', () => {
     `, 0.99)
     expect(error).toBeUndefined()
     const notes = synthNotes(events)
-    // At BPM 120: 1 beat = 0.5s. Query 0-0.99s = ~2 beats = first iteration
-    // 2 chords (3 notes each) + 2 bass notes = 8 play events
-    expect(notes.length).toBe(8)
+    // At BPM 120: 1 beat = 0.5s. Query 0-0.99s = ~2 beats = first iteration.
+    // chord_degree default = 4 notes (Cmaj7 / G7 — #355). 2 chords × 4 + 2 bass = 10.
+    expect(notes.length).toBe(10)
   })
 })

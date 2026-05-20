@@ -288,17 +288,23 @@ export function note_range(low: string | number, high: string | number): Ring<nu
 /**
  * Return the chord built on the Nth degree of a scale.
  *
- * chord_degree(:i, :c4, :major)  → chord(:c4, :major)
- * chord_degree(:iii, :c4, :major) → chord(:e4, :minor)
+ * chord_degree(:i, :c4, :major)  → ring(60, 64, 67, 71)   # C maj 7
+ * chord_degree(:i, :a3, :major)  → ring(57, 61, 64, 68)   # A maj 7
  *
  * Sonic Pi uses Roman numeral symbols (:i through :vii).
  * We also accept 1-based integer degrees for convenience.
+ *
+ * Default chord size is **4** (diatonic 7th chord), matching desktop Sonic Pi
+ * — see `lib/sonicpi/lang/western_theory.rb:900` `number_of_notes=4` and the
+ * desktop docstring line 920: "Taking four notes is the default. This gives
+ * us 7th chords - here it plays a C major 7." Pass an explicit `3` to get
+ * triads. (#355)
  */
 export function chord_degree(
   degreeVal: string | number,
   root: string | number,
   scaleType: string = 'major',
-  chordNumNotes: number = 3
+  chordNumNotes: number = 4
 ): Ring<number> {
   const idx = parseDegree(degreeVal)
   const scaleNotes = scale(root, scaleType)
