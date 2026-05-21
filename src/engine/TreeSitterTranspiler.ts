@@ -755,10 +755,17 @@ function transpileNode(node: any, ctx: TranspileContext): string {
 
     // ---- Method/function definitions ----
     case 'method': {
-      // def name(args) ... end — not used in Sonic Pi DSL but handle it
+      // def name(args) ... end — not the DSL's `define`, but allowed (#382).
       const nameNode = node.namedChildren[0]
       const params = node.namedChildren.find((c: any) => c.type === 'method_parameters')
       const body = node.namedChildren.find((c: any) => c.type === 'body_statement')
+      // Register the def name BEFORE transpiling the body so a recursive
+      // self-call (and any in-scope reference after the def) resolves to a JS
+      // call `name(__b)` instead of a bare reference. Without this, the body
+      // of `def f; f; end` emitted `function f() { f }` — valid JS that does
+      // nothing — and unconditional recursion never tripped a stack overflow,
+      // so the user saw silent acceptance of demonstrably broken Ruby (#382).
+      ctx.definedFunctions.add(nameNode.text)
       const paramStr = params
         ? params.namedChildren.map((c: any) => transpileNode(c, ctx)).join(', ')
         : ''

@@ -316,9 +316,16 @@ export class ProgramBuilder {
     return this
   }
 
-  at(times: number[], values: unknown[] | null, buildFn: (b: ProgramBuilder, ...args: unknown[]) => void): this {
-    for (let i = 0; i < times.length; i++) {
-      const offset = times[i]
+  at(times: number | number[], values: unknown[] | null, buildFn: (b: ProgramBuilder, ...args: unknown[]) => void): this {
+    // Desktop SP accepts BOTH `at 1 do … end` (scalar) and `at [1, 2] do … end`
+    // (array). Our transpiler currently emits a scalar unwrapped (`__b.at(1,
+    // null, fn)`) and pre-#383 the runtime iterated `times.length` — `(1).length`
+    // is `undefined`, the for-loop body never ran, and the callback silently
+    // never fired. Normalize here so both call shapes work without depending
+    // on the transpiler emitting consistent forms. (#383)
+    const timesArr: number[] = Array.isArray(times) ? times : [times]
+    for (let i = 0; i < timesArr.length; i++) {
+      const offset = timesArr[i]
       const val = values ? values[i % values.length] : i
       // `at` forks a thread per time like in_thread. forkBuilder also threads
       // iteration introspection (#226 Defect B — `at` used to drop it) and

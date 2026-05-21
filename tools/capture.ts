@@ -509,11 +509,26 @@ async function captureRun(
     errorSummary.push(`[network ${n.status} @ ${n.time}ms] ${n.url}`)
   }
 
-  // Check app console for runtime errors
+  // Check app console for runtime errors.
+  // The patterns scan `appConsoleText` (spw-console DOM textContent slice) for
+  // tokens that uniquely identify error blocks the engine renders via
+  // `friendlyError → console.logError`. New tokens MUST be added when a new
+  // friendly title shape lands — otherwise the comparator/cogate sweeps
+  // silently mis-classify the row as PASS-with-no-output (the SP98 / #384
+  // instrument-blindspot pattern). Includes both the user-facing friendly
+  // title ("Syntax error — your code could not be parsed", "Parse error at
+  // line N: ...") AND the raw token forms ("SyntaxError", "TypeError") in
+  // case any error path skips the friendly transform.
   const runtimePatterns = [
     'not a function', 'not defined', 'Something went wrong',
-    'Error in loop', "isn't available", 'SyntaxError', 'TypeError',
-    'ReferenceError', 'Unexpected token',
+    'Error in loop', "isn't available",
+    'SyntaxError', 'TypeError', 'ReferenceError', 'Unexpected token',
+    // #384 — friendly-error titles from FriendlyErrors.ts that the prior
+    // pattern list missed. Trailing space on 'Syntax error ' disambiguates
+    // from the no-space 'SyntaxError' token already above. Includes the
+    // stack-overflow title "Code nested too deeply" so #382-style recursion
+    // shows up as an error (previously the report said "None.").
+    'Parse error', 'Syntax error ', 'Code nested too deeply',
   ]
   for (const pattern of runtimePatterns) {
     if (appConsoleText.includes(pattern)) {
