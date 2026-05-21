@@ -45,10 +45,14 @@ interface CaptureResult {
   appFullText: string
 
   // Engine-level captures (issue #221) — hooked via __spw_engine setter
-  // BEFORE Run click, so we capture every puts/cue from app start without
-  // depending on Console ring-buffer scrollback or DOM textContent slicing.
+  // BEFORE Run click, so we capture every puts/cue/warning from app start
+  // without depending on Console ring-buffer scrollback or DOM textContent
+  // slicing. `warnings` is the SP95-loud channel (#350/#351 build-time
+  // limitations + future lints) — a real user sees these in `.spw-console`
+  // via the theme.warning hue; this array is the headless / dashboard view.
   puts: { t: number; msg: string }[]
   cues: { t: number; name: string; audioTime: number }[]
+  warnings: { t: number; title: string; msg: string }[]
 
   // Screenshots
   screenshotBefore: string  // path
@@ -269,6 +273,7 @@ async function captureRun(
     var _engine = null;
     window.__capturedPuts = [];
     window.__capturedCues = [];
+    window.__capturedWarnings = [];
     window.__capturedStartedAt = Date.now();
     Object.defineProperty(window, '__spw_engine', {
       configurable: true,
@@ -284,6 +289,17 @@ async function captureRun(
         e.cueHandler = function(name, audioTime) {
           window.__capturedCues.push({ t: Date.now() - window.__capturedStartedAt, name: name, audioTime: audioTime });
           if (origCue) origCue(name, audioTime);
+        };
+        // SP95-loud: capture build-time warnings (#350/#351) symmetrically
+        // with puts/cues so the dashboard/comparator can see them, not just
+        // the user via the editor console. Without this hook the real user
+        // sees the warning in the spw-console DOM but the captured report
+        // misses it -- capture.ts builds its sections from these intercept
+        // arrays, not from DOM textContent (issue #221 design rationale).
+        var origWarn = e.warningHandler;
+        e.warningHandler = function(title, msg) {
+          window.__capturedWarnings.push({ t: Date.now() - window.__capturedStartedAt, title: title, msg: msg });
+          if (origWarn) origWarn(title, msg);
         };
       }
     });
@@ -457,8 +473,9 @@ async function captureRun(
   // __name rewriting of arrow-function closures.
   const engineHooks = await page.evaluate(`({
     puts: window.__capturedPuts || [],
-    cues: window.__capturedCues || []
-  })`) as { puts: { t: number; msg: string }[]; cues: { t: number; name: string; sourceLoop: string }[] }
+    cues: window.__capturedCues || [],
+    warnings: window.__capturedWarnings || []
+  })`) as { puts: { t: number; msg: string }[]; cues: { t: number; name: string; sourceLoop: string }[]; warnings: { t: number; title: string; msg: string }[] }
 
   // Try to isolate the console pane text (everything after "Audio engine ready" or "Happy live coding")
   let appConsoleText = ''
@@ -560,6 +577,7 @@ async function captureRun(
     warningsSummary,
     puts: engineHooks.puts,
     cues: engineHooks.cues,
+    warnings: engineHooks.warnings,
   }
 }
 
@@ -650,6 +668,24 @@ function writeCaptureReport(result: CaptureResult, outputPath: string): void {
   } else {
     for (const p of result.puts) {
       lines.push(`[${p.t}ms] ${p.msg}`)
+    }
+  }
+  lines.push('```')
+  lines.push('')
+
+  // Engine warnings (SP95-loud + future build-time lints).
+  // Real users see these in `.spw-console` via theme.warning hue; this
+  // section is the headless / dashboard view. Symmetric with App Console
+  // Output above — always emitted (`(none)` when empty) so the dashboard
+  // can deterministically count zero-warning runs.
+  lines.push('## Engine Warnings')
+  lines.push('```')
+  if (result.warnings.length === 0) {
+    lines.push('(none)')
+  } else {
+    for (const w of result.warnings) {
+      lines.push(`[${w.t}ms] ${w.title}`)
+      lines.push(`         ${w.msg}`)
     }
   }
   lines.push('```')

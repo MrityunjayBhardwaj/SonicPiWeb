@@ -9,6 +9,7 @@ import { ALL_FX_NAMES } from './FxNames'
 import { DSL_NAMES } from './DslNames'
 import { createIsolatedExecutor, validateCode, type ScopeHandle } from './Sandbox'
 import { autoTranspileDetailed } from './TreeSitterTranspiler'
+import { detectSp95Limitations } from './Sp95Lint'
 import { getExample, type Example } from './examples'
 import { initTreeSitter } from './TreeSitterTranspiler'
 
@@ -90,6 +91,16 @@ export class SonicPiEngine {
   private printHandler: ((msg: string) => void) | null = null
   private cueHandler: ((name: string, time: number) => void) | null = null
   private loadExampleHandler: ((example: Example) => void) | null = null
+  /**
+   * Non-fatal warnings surfaced to the user (audio still runs). Wired by
+   * App.ts to `Console.logWarning` so a v1 limitation is **visible** in
+   * the editor console rather than producing the SP95 "silent failure"
+   * churn bomb (the director/section pattern playing nothing without any
+   * indication). Title is short ("Cross-loop set/get"), message is the
+   * actionable explanation ("use same-loop sync-gate instead — #350").
+   * Per-evaluate dedup happens in the detector that emits (Sp95Lint.ts).
+   */
+  private warningHandler: ((title: string, msg: string) => void) | null = null
   /**
    * Per-evaluation dedup set for clamp/range warnings (issue #202, G4).
    * SoundLayer's validateAndClamp emits one warning per out-of-range param,
@@ -315,6 +326,23 @@ export class SonicPiEngine {
       // (the user may have changed the offending value, and they shouldn't be
       // forever-silenced because we already showed the warning once).
       this.warnDedup.clear()
+
+      // SP95-loud co-gate (#350/#351): scan source for known v1-limitation
+      // patterns BEFORE transpile, so even patterns inside broken-syntax code
+      // surface (and so the warning attaches to user intent, not to whatever
+      // the transpiler chose to do with it). Pure-regex detector lives in
+      // `Sp95Lint.ts`; dedup is per-evaluate-call (a fresh Set per Run) so
+      // a hot-swap that keeps the same pattern still shows once on each
+      // explicit Run, but never floods within a single Run.
+      if (this.warningHandler) {
+        const seen = new Set<string>()
+        for (const w of detectSp95Limitations(code)) {
+          const key = w.pattern + '|' + w.title
+          if (seen.has(key)) continue
+          seen.add(key)
+          this.warningHandler(w.title, w.message)
+        }
+      }
 
       // First run or after stop: create fresh scheduler
       if (!isReEvaluate) {
@@ -1839,6 +1867,25 @@ export class SonicPiEngine {
   /** Register a handler for runtime errors inside `live_loop` bodies. */
   setRuntimeErrorHandler(handler: (err: Error) => void): void {
     this.runtimeErrorHandler = handler
+  }
+
+  /**
+   * Register a handler for non-fatal warnings — v1 limitations and latent
+   * issues detected at build time. Audio still runs after a warning; the
+   * warning is the SP95-loud co-gate's user-facing surface (#350/#351
+   * cross-loop set/get + cue-payload-via-sync are silent without this).
+   */
+  setWarningHandler(handler: (title: string, msg: string) => void): void {
+    this.warningHandler = handler
+  }
+
+  /**
+   * Emit a build-time warning to the user. Safe no-op when no handler
+   * is wired (e.g. capture.ts headless runs) — the warning is signaled
+   * via the App's editor console only.
+   */
+  emitWarning(title: string, msg: string): void {
+    if (this.warningHandler) this.warningHandler(title, msg)
   }
 
   /** Register a handler for `puts` / `print` output from user code. */
