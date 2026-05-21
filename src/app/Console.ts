@@ -4,7 +4,7 @@
 
 import { theme } from './theme'
 
-export type LogLevel = 'info' | 'error' | 'event' | 'system' | 'cue'
+export type LogLevel = 'info' | 'error' | 'event' | 'system' | 'cue' | 'warning'
 
 interface LogEntry {
   level: LogLevel
@@ -164,6 +164,17 @@ export class Console {
     this.log(`${title}\n${message}`, 'error')
   }
 
+  /**
+   * Warning — non-fatal, audio still runs, but a v1 limitation or
+   * latent issue was detected (e.g. SP95-loud cross-loop set/get,
+   * cue payload via sync return-value). Same structured-block treatment
+   * as logError but in the theme's warning hue so the user can see at a
+   * glance that the run continues vs. logError where audio doesn't start.
+   */
+  logWarning(title: string, message: string): void {
+    this.log(`${title}\n${message}`, 'warning')
+  }
+
   logSystem(text: string): void {
     this.log(text, 'system')
   }
@@ -248,6 +259,36 @@ export class Console {
         content.style.color = theme.purple
         line.style.borderLeftColor = `${theme.purple}33`
         break
+      case 'warning': {
+        // Structured warning block — same shape as 'error' but in the
+        // theme's warning hue (yellow/amber). Audio still runs; the block
+        // says "v1 limitation / latent issue, here's what to use instead."
+        line.style.background = `${theme.warning}14`
+        line.style.borderLeftColor = theme.warning
+        line.style.borderLeftWidth = '3px'
+        line.style.padding = '0.4rem 0.6rem'
+        line.style.margin = '0.2rem 0'
+        line.style.borderRadius = '0 4px 4px 0'
+
+        const parts = entry.text.split('\n')
+        const titleText = parts[0] || 'Warning'
+        const bodyText = parts.slice(1).join('\n').trim()
+
+        const titleEl = document.createElement('div')
+        titleEl.style.cssText = `color: ${theme.warning}; font-weight: 600; font-size: 0.75rem; margin-bottom: 0.25rem;`
+        titleEl.textContent = `⚠ ${titleText}`
+        content.appendChild(titleEl)
+
+        if (bodyText) {
+          const bodyEl = document.createElement('div')
+          bodyEl.style.cssText = `color: ${theme.yellow}; font-size: 0.68rem; white-space: pre-wrap; line-height: 1.5;`
+          bodyEl.textContent = bodyText
+          content.appendChild(bodyEl)
+        }
+
+        content.style.color = '' // children handle color
+        break
+      }
       case 'system':
         content.style.color = theme.comment
         content.style.fontStyle = 'italic'

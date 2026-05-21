@@ -844,6 +844,14 @@ export class App {
         this.console.log(msg, 'info')
       })
 
+      this.engine.setWarningHandler((title, msg) => {
+        // SP95-loud + future build-time lints: audio still runs, but a
+        // v1 limitation or latent issue was detected. Surfaced with the
+        // theme.warning hue so the user notices the run isn't silent (the
+        // SP95 director/section pattern was a churn-bomb without this).
+        this.console.logWarning(title, msg)
+      })
+
       this.engine.setCueHandler((name, time) => {
         this.cueLog.logCue(name, this.cueLog.currentRun, time * 1000)
       })
