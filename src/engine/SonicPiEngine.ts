@@ -128,7 +128,11 @@ export class SonicPiEngine {
   /** Pending volume to apply when bridge initializes */
   private pendingVolume: number | null = null
   /** Stored builder functions for capture/query path */
-  private loopBuilders = new Map<string, (b: ProgramBuilder) => void>()
+  // SP95(d) #393: builderFn may be async — an S3 (sync/cue) loop body awaits a
+  // scheduler-resolved sync payload mid-build (matching desktop's blocking sync).
+  // S1/S2 bodies stay synchronous; `await` on their void return is identity, and
+  // the QueryInterpreter path (capture, S1/S2 only) ignores the return value.
+  private loopBuilders = new Map<string, (b: ProgramBuilder) => void | Promise<void>>()
   /** Per-loop seed counters for deterministic random */
   private loopSeeds = new Map<string, number>()
   /** Per-loop tick counters — persisted across iterations so ring.tick() advances correctly */
@@ -642,9 +646,9 @@ export class SonicPiEngine {
       // Scope handle — set when executor is created, used to isolate loop scopes
       let scopeHandle: ScopeHandle | null = null
 
-      const wrappedLiveLoop = (name: string, builderFnOrOpts: ((b: ProgramBuilder) => void) | Record<string, unknown>, maybeFn?: (b: ProgramBuilder) => void) => {
+      const wrappedLiveLoop = (name: string, builderFnOrOpts: ((b: ProgramBuilder) => void | Promise<void>) | Record<string, unknown>, maybeFn?: (b: ProgramBuilder) => void | Promise<void>) => {
         // Support both: live_loop("name", fn) and live_loop("name", {sync: "x"}, fn)
-        let builderFn: (b: ProgramBuilder) => void
+        let builderFn: (b: ProgramBuilder) => void | Promise<void>
         let syncTarget: string | null = null
         if (typeof builderFnOrOpts === 'function') {
           builderFn = builderFnOrOpts
@@ -809,7 +813,12 @@ export class SonicPiEngine {
           const prevBuildBuilder = this.currentBuildBuilder
           this.currentBuildBuilder = builder
           try {
-            builderFn(builder)
+            // SP95(d) #393: await so an S3 body can suspend on a scheduler-resolved
+            // sync mid-build. For today's synchronous S1/S2 bodies this `await` is
+            // identity (await on a non-thenable void). The single-field
+            // currentBuildBuilder above stays safe until sync actually awaits — the
+            // re-entrancy hardening is tracked in #395.
+            await builderFn(builder)
           } finally {
             this.currentBuildBuilder = prevBuildBuilder
             this.buildNestingDepth--
@@ -944,7 +953,7 @@ export class SonicPiEngine {
       // Matches desktop Sonic Pi: top-level with_fx creates FX once, GC blocked by subthread.join.
       const originalWrappedLiveLoop = wrappedLiveLoop
       const fxAwareWrappedLiveLoop = (name: string, builderFnOrOpts: ((b: ProgramBuilder) => void) | Record<string, unknown>, maybeFn?: (b: ProgramBuilder) => void) => {
-        let builderFn: (b: ProgramBuilder) => void
+        let builderFn: (b: ProgramBuilder) => void | Promise<void>
         let opts: Record<string, unknown> | null = null
         if (typeof builderFnOrOpts === 'function') {
           builderFn = builderFnOrOpts
