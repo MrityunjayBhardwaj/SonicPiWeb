@@ -182,4 +182,58 @@ describe('Tier-1 polish — WRONG-AUDIO / POOR-MESSAGE tail (PATH B)', () => {
       expect(warnings.some(w => /note resolved to NaN/i.test(w))).toBe(true)
     })
   })
+
+  describe('#388 (B4) — unparseable note name is skipped + named, not silently coerced to 60', () => {
+    it('build-time: play("not a note") yields a NaN note carrying the original string', () => {
+      const program = new ProgramBuilder(0).play('not a note').play(72).build()
+      const plays = program.filter((s): s is typeof s & { note: number; noteName?: string } => s.tag === 'play')
+      expect(Number.isNaN(plays[0].note)).toBe(true)
+      expect(plays[0].noteName).toBe('not a note')
+      // The valid note after it is unaffected and carries no noteName marker.
+      expect(plays[1].note).toBe(72)
+      expect(plays[1].noteName).toBeUndefined()
+    })
+
+    it('dispatch: the bad name is NOT triggered; a warning names it; the valid note still plays', async () => {
+      const scheduler = new VirtualTimeScheduler({ getAudioTime: () => 0, schedAheadTime: 100 })
+      const eventStream = new SoundEventStream()
+      const bridge = createNoteRecordingBridge()
+      const warnings: string[] = []
+      const program = new ProgramBuilder(0).play('not a note').play(72).sleep(999999).build()
+
+      const ctx: AudioCtx = {
+        bridge, scheduler, taskId: 'test', eventStream, schedAheadTime: 100,
+        nodeRefMap: new Map(), reusableFx: new Map(),
+        printHandler: (m) => warnings.push(m),
+      }
+      scheduler.registerLoop('test', async () => { await runProgram(program, ctx) })
+      scheduler.tick(100)
+      await flushMicrotasks()
+
+      expect(bridge.triggeredNotes).toEqual([72])  // no phantom note:60
+      expect(warnings.some(w => /"not a note" isn't a valid note name/i.test(w))).toBe(true)
+    })
+
+    it('NEGATIVE CONTROL: valid note names (numbers, "c4", "eb3", "fs5") still resolve and play', async () => {
+      const scheduler = new VirtualTimeScheduler({ getAudioTime: () => 0, schedAheadTime: 100 })
+      const eventStream = new SoundEventStream()
+      const bridge = createNoteRecordingBridge()
+      const warnings: string[] = []
+      const program = new ProgramBuilder(0)
+        .play(60).play('c4').play('eb3').play('fs5').sleep(999999).build()
+
+      const ctx: AudioCtx = {
+        bridge, scheduler, taskId: 'test', eventStream, schedAheadTime: 100,
+        nodeRefMap: new Map(), reusableFx: new Map(),
+        printHandler: (m) => warnings.push(m),
+      }
+      scheduler.registerLoop('test', async () => { await runProgram(program, ctx) })
+      scheduler.tick(100)
+      await flushMicrotasks()
+
+      // c4=60, eb3=51 (E♭3), fs5=78 (F♯5) — all valid, none refused.
+      expect(bridge.triggeredNotes).toEqual([60, 60, 51, 78])
+      expect(warnings.length).toBe(0)
+    })
+  })
 })

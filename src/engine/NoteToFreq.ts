@@ -13,20 +13,22 @@ const NOTE_NAMES: Record<string, number> = {
 }
 
 /**
- * Convert a note name like "c4", "fs3", "eb5" to a MIDI number.
- * Also accepts bare MIDI numbers as strings or numbers.
+ * Strict note resolution: returns NaN for an unparseable note name instead of
+ * falling back to middle C. Callers that must distinguish "the user typed
+ * garbage" from "the user typed middle C" (e.g. play's dispatch guard, B4 #388)
+ * use this; everything else uses `noteToMidi`, which keeps the lenient fallback.
  */
-export function noteToMidi(note: string | number): number {
+export function noteToMidiStrict(note: string | number): number {
   if (typeof note === 'number') return note
 
   const str = note.toLowerCase().trim()
 
-  // Try parsing as plain number
+  // Try parsing as plain number (e.g. "60", and "" → 0, matching prior behavior).
   const num = Number(str)
   if (!isNaN(num)) return num
 
   const match = str.match(/^([a-g])(s|b|#)?(\d+)?$/)
-  if (!match) return MIDDLE_C_MIDI
+  if (!match) return NaN
 
   const [, letter, accidental, octaveStr] = match
   const base = NOTE_NAMES[letter]
@@ -38,6 +40,18 @@ export function noteToMidi(note: string | number): number {
   if (accidental === 'b') midi -= 1
 
   return midi
+}
+
+/**
+ * Convert a note name like "c4", "fs3", "eb5" to a MIDI number.
+ * Also accepts bare MIDI numbers as strings or numbers.
+ * Falls back to middle C (60) when a note name can't be parsed — preserves the
+ * lenient behavior relied on by chord/scale/control helpers. Use
+ * `noteToMidiStrict` where an unparseable name must be detectable.
+ */
+export function noteToMidi(note: string | number): number {
+  const midi = noteToMidiStrict(note)
+  return Number.isNaN(midi) ? MIDDLE_C_MIDI : midi
 }
 
 /**
