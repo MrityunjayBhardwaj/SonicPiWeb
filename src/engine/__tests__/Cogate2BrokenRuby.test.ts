@@ -1,6 +1,35 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { initTreeSitter, autoTranspileDetailed } from '../TreeSitterTranspiler'
 import { ProgramBuilder } from '../ProgramBuilder'
+import { VirtualTimeScheduler } from '../VirtualTimeScheduler'
+import { runProgram, type AudioContext as AudioCtx } from '../interpreters/AudioInterpreter'
+import { SoundEventStream } from '../SoundEventStream'
+import type { SuperSonicBridge } from '../SuperSonicBridge'
+
+async function flushMicrotasks(rounds = 10) {
+  for (let i = 0; i < rounds; i++) await new Promise((r) => setTimeout(r, 0))
+}
+
+/** Mock bridge that records the `note` of every triggerSynth call. */
+function createNoteRecordingBridge(): SuperSonicBridge & { triggeredNotes: number[] } {
+  let nextNode = 5000
+  const triggeredNotes: number[] = []
+  return {
+    triggeredNotes,
+    async triggerSynth(_name: string, _time: number, params: Record<string, number>) {
+      triggeredNotes.push(params.note)
+      return nextNode++
+    },
+    async playSample() { return nextNode++ },
+    allocateBus() { return 16 },
+    freeBus() {},
+    freeNode() {},
+    flushMessages() {},
+    get audioContext() { return null as unknown as AudioContext },
+    send() {},
+    isLiveAudioStreaming() { return false },
+  } as unknown as SuperSonicBridge & { triggeredNotes: number[] }
+}
 
 beforeAll(async () => {
   await initTreeSitter({
@@ -96,6 +125,61 @@ describe('cogate-2 SILENT-FAIL fixes (#382 #383 #384)', () => {
       expect(runtimePatterns.some(p => friendlyParseTitle.includes(p))).toBe(true)
       expect(runtimePatterns.some(p => friendlyParseMsg.includes(p))).toBe(true)
       expect(runtimePatterns.some(p => friendlyStackTitle.includes(p))).toBe(true)
+    })
+  })
+})
+
+describe('Tier-1 polish — WRONG-AUDIO / POOR-MESSAGE tail (PATH B)', () => {
+  describe('#387 (B7) — non-finite note (play 60 / 0 → Infinity) is skipped, not sent to scsynth', () => {
+    it('build-time: play(60 / 0) produces a non-finite play step', () => {
+      // `60 / 0` is Infinity in JS (not a throw). The note is finalized at
+      // build time in _pushPlayStep, so the step carries a non-finite note.
+      const program = new ProgramBuilder(0).play(60 / 0).play(72).build()
+      const plays = program.filter((s): s is typeof s & { note: number } => s.tag === 'play')
+      expect(Number.isFinite(plays[0].note)).toBe(false)
+      expect(plays[1].note).toBe(72)
+    })
+
+    it('dispatch: Infinity note is NOT triggered; a warning fires; the valid note still plays', async () => {
+      const scheduler = new VirtualTimeScheduler({ getAudioTime: () => 0, schedAheadTime: 100 })
+      const eventStream = new SoundEventStream()
+      const bridge = createNoteRecordingBridge()
+      const warnings: string[] = []
+      const program = new ProgramBuilder(0).play(60 / 0).play(72).sleep(999999).build()
+
+      const ctx: AudioCtx = {
+        bridge, scheduler, taskId: 'test', eventStream, schedAheadTime: 100,
+        nodeRefMap: new Map(), reusableFx: new Map(),
+        printHandler: (m) => warnings.push(m),
+      }
+      scheduler.registerLoop('test', async () => { await runProgram(program, ctx) })
+      scheduler.tick(100)
+      await flushMicrotasks()
+
+      // The non-finite note must NOT reach the synth; only the valid 72 does.
+      expect(bridge.triggeredNotes).toEqual([72])
+      // A visible diagnostic must be surfaced naming the non-finite resolution.
+      expect(warnings.some(w => /note resolved to Infinity/i.test(w))).toBe(true)
+    })
+
+    it('NaN note (0 / 0) is also skipped', async () => {
+      const scheduler = new VirtualTimeScheduler({ getAudioTime: () => 0, schedAheadTime: 100 })
+      const eventStream = new SoundEventStream()
+      const bridge = createNoteRecordingBridge()
+      const warnings: string[] = []
+      const program = new ProgramBuilder(0).play(0 / 0).play(48).sleep(999999).build()
+
+      const ctx: AudioCtx = {
+        bridge, scheduler, taskId: 'test', eventStream, schedAheadTime: 100,
+        nodeRefMap: new Map(), reusableFx: new Map(),
+        printHandler: (m) => warnings.push(m),
+      }
+      scheduler.registerLoop('test', async () => { await runProgram(program, ctx) })
+      scheduler.tick(100)
+      await flushMicrotasks()
+
+      expect(bridge.triggeredNotes).toEqual([48])
+      expect(warnings.some(w => /note resolved to NaN/i.test(w))).toBe(true)
     })
   })
 })

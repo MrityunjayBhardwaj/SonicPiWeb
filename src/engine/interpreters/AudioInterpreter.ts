@@ -106,6 +106,20 @@ export async function runProgram(
         // Sonic Pi's should_trigger?: skip if on: is present and falsy
         if ('on' in step.opts && !step.opts.on) break
 
+        // B7 (#387): validate-at-boundary. JS `60 / 0` evaluates to Infinity
+        // (not a throw), and `0 / 0` to NaN — both flow straight to scsynth as
+        // `note: Infinity`/`note: NaN`, producing audible garbage with no
+        // diagnostic. Skip the trigger and surface a visible warning so a
+        // first-time user knows their arithmetic resolved to a non-pitch.
+        // The valid notes around it are independent steps and still fire.
+        if (!Number.isFinite(step.note)) {
+          ctx.printHandler?.(
+            `[Warning] play skipped — note resolved to ${step.note}. ` +
+            `Check for division by zero or invalid arithmetic (e.g. \`play 60 / 0\`).`
+          )
+          break
+        }
+
         const audioTime = task.virtualTime + ctx.schedAheadTime
         const synth = resolveSynthName(step.synth ?? currentSynth)
         const nodeRef = nextNodeRef++
