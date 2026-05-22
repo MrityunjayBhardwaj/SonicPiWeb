@@ -236,4 +236,37 @@ describe('Tier-1 polish — WRONG-AUDIO / POOR-MESSAGE tail (PATH B)', () => {
       expect(warnings.length).toBe(0)
     })
   })
+
+  describe('#389 (B2) — unterminated string is refused (SV19), not silently degraded', () => {
+    it('puts "hello (unterminated) → hasError, not a silent puts(hello) + play 60', () => {
+      const r = autoTranspileDetailed('puts "hello\nplay 60\n')
+      // Before fix: hasError:false, emitted __b.puts(hello) + __b.play(60).
+      // tree-sitter recovers with an ERROR node nested in the `call`, which the
+      // walker never visits — rootNode.hasError catches it.
+      expect(r.hasError).toBe(true)
+      expect(r.errorMessage ?? '').toMatch(/syntax error/i)
+    })
+
+    it('NEGATIVE CONTROL: a properly-terminated string is NOT refused (same construct, no over-refusal)', () => {
+      // The discriminator vs B2: this string is closed. Refusal must key on the
+      // ERROR/MISSING node, not on the presence of a string literal.
+      const r = autoTranspileDetailed('puts "hello world"\nplay 60\n')
+      expect(r.hasError).toBe(false)
+    })
+
+    it('NEGATIVE CONTROL: a block + symbol program parses cleanly', () => {
+      const r = autoTranspileDetailed('with_fx :reverb do\n  play 60\n  sleep 1\nend\n')
+      expect(r.hasError).toBe(false)
+    })
+
+    it('NEGATIVE CONTROL: a times-block with kwargs parses cleanly', () => {
+      const r = autoTranspileDetailed('use_synth :tb303\n8.times do\n  play 60, cutoff: 100\n  sleep 0.25\nend\n')
+      expect(r.hasError).toBe(false)
+    })
+
+    it('NEGATIVE CONTROL: ordinary valid program is unaffected', () => {
+      const r = autoTranspileDetailed('play 60\nsleep 1\nplay 72\n')
+      expect(r.hasError).toBe(false)
+    })
+  })
 })

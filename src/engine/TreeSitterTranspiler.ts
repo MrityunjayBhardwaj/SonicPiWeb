@@ -141,6 +141,20 @@ export interface TreeSitterTranspileResult {
  * If tree-sitter is not ready, returns `{ ok: false }` so the caller
  * can fall back to the regex transpiler.
  */
+/**
+ * Depth-first search for the first ERROR or MISSING node in the tree — used to
+ * locate the line of a parse failure that tree-sitter recovered from. Returns
+ * null if none is found (caller only calls this when rootNode.hasError).
+ */
+function findFirstErrorNode(node: any): any | null {
+  if (node.type === 'ERROR' || node.isMissing) return node
+  for (let i = 0; i < node.childCount; i++) {
+    const found = findFirstErrorNode(node.child(i))
+    if (found) return found
+  }
+  return null
+}
+
 export function treeSitterTranspile(ruby: string): TreeSitterTranspileResult {
   if (!isTreeSitterReady()) {
     return { code: '', ok: false, errors: ['tree-sitter not initialized'] }
@@ -169,6 +183,24 @@ export function treeSitterTranspile(ruby: string): TreeSitterTranspileResult {
   }
 
   const js = transpileNode(tree.rootNode, ctx)
+
+  // B2 (#389) — SV19 refuse-or-accept safety net. tree-sitter recovers from
+  // malformed input (e.g. an unterminated string `puts "hello`) by inserting
+  // ERROR/MISSING nodes, but those can sit as children of a node whose handler
+  // only visits specific named fields (e.g. `call` reads identifier +
+  // argument_list, skipping the orphaned-quote ERROR). The walker never visits
+  // them, so no parse error is pushed and the malformed program silently
+  // degrades while the next line's audio fires. `rootNode.hasError` is true iff
+  // any ERROR/MISSING node exists anywhere in the tree — catch it here so the
+  // run is refused with a syntax error rather than partially executed. Valid
+  // heredocs and multi-line strings parse cleanly (hasError=false), so this
+  // does not over-refuse.
+  if (errors.length === 0 && tree.rootNode.hasError) {
+    const bad = findFirstErrorNode(tree.rootNode)
+    const line = (bad ?? tree.rootNode).startPosition.row + 1
+    const snippet = (bad?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 50)
+    errors.push(`Syntax error at line ${line}: your code could not be parsed${snippet ? ` (near \`${snippet}\`)` : ''}`)
+  }
 
   // Validate output
   if (errors.length > 0) {
