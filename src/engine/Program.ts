@@ -7,7 +7,12 @@
  */
 
 export type Step =
-  | { tag: 'play'; note: number; opts: Record<string, number>; synth?: string; srcLine?: number }
+  | { tag: 'play'; note: number; opts: Record<string, number>; synth?: string; srcLine?: number;
+      /** B4 (#388): the original unparseable note-name string, set only when
+       *  `note` is NaN because a string like "not a note" failed to resolve.
+       *  Lets the dispatch-time guard name the bad input instead of silently
+       *  sounding the middle-C fallback. */
+      noteName?: string }
   | { tag: 'sample'; name: string; opts: Record<string, number>; srcLine?: number }
   | { tag: 'sleep'; beats: number }
   | { tag: 'useSynth'; name: string }

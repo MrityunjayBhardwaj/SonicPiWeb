@@ -106,6 +106,23 @@ export async function runProgram(
         // Sonic Pi's should_trigger?: skip if on: is present and falsy
         if ('on' in step.opts && !step.opts.on) break
 
+        // B7 (#387) / B4 (#388): validate-at-boundary. A non-finite note never
+        // reaches scsynth — it would produce audible garbage with no diagnostic.
+        // Two sources converge here:
+        //   - B4: an unparseable note-name string ("not a note") resolves to NaN
+        //     and carries the original string in step.noteName, so we can name it
+        //     rather than silently sounding middle C.
+        //   - B7: arithmetic like `60 / 0` (Infinity) or `0 / 0` (NaN).
+        // Skip the trigger, surface a visible warning. Valid notes around it are
+        // independent steps and still fire.
+        if (!Number.isFinite(step.note)) {
+          const reason = step.noteName !== undefined
+            ? `"${step.noteName}" isn't a valid note name (use e.g. 60, :c4, :eb3)`
+            : `note resolved to ${step.note}. Check for division by zero or invalid arithmetic (e.g. \`play 60 / 0\`).`
+          ctx.printHandler?.(`[Warning] play skipped — ${reason}`)
+          break
+        }
+
         const audioTime = task.virtualTime + ctx.schedAheadTime
         const synth = resolveSynthName(step.synth ?? currentSynth)
         const nodeRef = nextNodeRef++

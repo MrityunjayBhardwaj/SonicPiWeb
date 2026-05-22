@@ -10,7 +10,7 @@
 
 import type { Step, Program } from './Program'
 import { SeededRandom } from './SeededRandom'
-import { noteToMidi, midiToFreq, hzToMidi, noteInfo } from './NoteToFreq'
+import { noteToMidi, noteToMidiStrict, midiToFreq, hzToMidi, noteInfo } from './NoteToFreq'
 import { ring, knit, range, line, Ring, Ramp } from './Ring'
 import { spread } from './EuclideanRhythm'
 import { chord, scale, chord_invert, note, note_range, chord_degree, degree, chord_names, scale_names } from './ChordScale'
@@ -81,7 +81,19 @@ export class ProgramBuilder {
   private _pushPlayStep(noteVal: number | string | null | undefined, opts?: Record<string, unknown>): void {
     // :rest / nil — Desktop SP skips the synth trigger entirely
     if (noteVal === null || noteVal === undefined || noteVal === 'rest') return
-    const midi = (typeof noteVal === 'string' ? noteToMidi(noteVal) : noteVal) + this._transpose
+    // B4 (#388): resolve string note names strictly. An unparseable name (e.g.
+    // "not a note") yields NaN here instead of silently coercing to middle C;
+    // the NaN note is carried with its original string so the dispatch-time
+    // guard can skip it and name the bad input. Numeric notes pass through.
+    let midi: number
+    let noteName: string | undefined
+    if (typeof noteVal === 'string') {
+      const resolved = noteToMidiStrict(noteVal)
+      if (Number.isNaN(resolved)) noteName = noteVal
+      midi = resolved + this._transpose
+    } else {
+      midi = noteVal + this._transpose
+    }
     const synth = opts?.synth as string | undefined
     const srcLine = opts?._srcLine as number | undefined
     // Strip non-numeric keys before storing; remaining values are synthesis params (all numbers).
@@ -97,6 +109,7 @@ export class ProgramBuilder {
       opts: cleanOpts,
       synth: synth ?? this.currentSynth,
       srcLine,
+      ...(noteName !== undefined ? { noteName } : {}),
     })
   }
 
