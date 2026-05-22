@@ -5,6 +5,7 @@ import { VirtualTimeScheduler } from '../VirtualTimeScheduler'
 import { runProgram, type AudioContext as AudioCtx } from '../interpreters/AudioInterpreter'
 import { SoundEventStream } from '../SoundEventStream'
 import type { SuperSonicBridge } from '../SuperSonicBridge'
+import { friendlyError } from '../FriendlyErrors'
 
 async function flushMicrotasks(rounds = 10) {
   for (let i = 0; i < rounds; i++) await new Promise((r) => setTimeout(r, 0))
@@ -267,6 +268,28 @@ describe('Tier-1 polish — WRONG-AUDIO / POOR-MESSAGE tail (PATH B)', () => {
     it('NEGATIVE CONTROL: ordinary valid program is unaffected', () => {
       const r = autoTranspileDetailed('play 60\nsleep 1\nplay 72\n')
       expect(r.hasError).toBe(false)
+    })
+  })
+
+  describe('#390 (B9) — raise is named as an unsupported keyword, not framed as a typo', () => {
+    it('"raise is not a function" → titled as an unsupported keyword, not "raise is not a function"', () => {
+      const fe = friendlyError(new Error('raise is not a function'))
+      expect(fe.title).toMatch(/raise isn't supported/i)
+      expect(fe.message).toMatch(/ruby keyword/i)
+      // Must NOT fall through to the generic typo framing.
+      expect(fe.title).not.toMatch(/raise is not a function/i)
+      expect(fe.message).not.toMatch(/typo/i)
+    })
+
+    it('"fail is not a function" gets the same keyword treatment', () => {
+      const fe = friendlyError(new Error('fail is not a function'))
+      expect(fe.title).toMatch(/fail isn't supported/i)
+    })
+
+    it('NEGATIVE CONTROL: a genuine unknown function still uses the typo-aware generic handler', () => {
+      const fe = friendlyError(new Error('wibble is not a function'))
+      expect(fe.title).toMatch(/wibble is not a function/i)
+      expect(fe.message).toMatch(/typo/i)
     })
   })
 })

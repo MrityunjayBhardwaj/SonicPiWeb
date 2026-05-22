@@ -356,6 +356,22 @@ const ERROR_PATTERNS: Array<{
         `Note: Sharps use "s" (not #), flats use "b".`,
     }),
   },
+  // B9 (#390): `raise`/`fail` are real Ruby keywords we don't support in the
+  // browser sandbox. They transpile to a bare call, so the generic handler below
+  // would frame them as a typo ("raise is not a function"). Name them as
+  // unsupported keywords instead. Must precede the generic "is not a function".
+  {
+    test: (msg) => /\b(raise|fail) is not a function/i.test(msg),
+    transform: (msg) => {
+      const kw = /\bfail is not a function/i.test(msg) ? 'fail' : 'raise'
+      return {
+        title: `${kw} isn't supported yet`,
+        message: `"${kw}" is a Ruby keyword that isn't available in the browser sandbox yet.\n\n` +
+          `If you want to stop your code, use \`stop\` instead.\n` +
+          `To leave a note for yourself, use a comment (\`# like this\`).`,
+      }
+    },
+  },
   // Type errors (common JS mistakes)
   {
     test: (msg) => /is not a function/i.test(msg),
