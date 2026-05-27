@@ -9,8 +9,15 @@
 import { describe, it, expect } from 'vitest'
 import { detectSp95Limitations } from '../Sp95Lint'
 
-describe('Sp95Lint — cross-loop set/get (#350)', () => {
-  it('warns on the canonical director/section pattern (different loops)', () => {
+// The #350 cross-loop set/get detector was retired 2026-05-28 (SV47 / commit
+// 73a4475): the time-indexed Time State + eager b.set + post-sync vt bump
+// make the idiom read the cuer's same-vt value. The block below flips the
+// former positives to NEGATIVE CONTROLS — the pattern must NOT emit a warning
+// any more — and keeps the original negative controls in place (SV50
+// negative-control discipline: false positives are strictly worse than the
+// silent failure they replaced).
+describe('Sp95Lint — cross-loop set/get is supported (#350, NOT a warning)', () => {
+  it('does NOT warn on the canonical director/section pattern (NOW supported)', () => {
     const src = `
       live_loop :director do
         set :root, (ring 52, 55, 57, 59).tick
@@ -23,9 +30,8 @@ describe('Sp95Lint — cross-loop set/get (#350)', () => {
       end
     `
     const w = detectSp95Limitations(src)
-    expect(w.length).toBeGreaterThan(0)
-    expect(w[0].pattern).toBe('cross-loop-set-get')
-    expect(w[0].title).toMatch(/Cross-loop set\/get/)
+    // No SP95 warning at all on this pattern — it now reads {55,59} desktop-match.
+    expect(w).toEqual([])
   })
 
   it('does NOT warn when set + get are in the SAME loop (works on web)', () => {
@@ -37,11 +43,10 @@ describe('Sp95Lint — cross-loop set/get (#350)', () => {
       end
     `
     const w = detectSp95Limitations(src)
-    expect(w.filter(x => x.pattern === 'cross-loop-set-get')).toEqual([])
+    expect(w).toEqual([])
   })
 
-  it('does NOT warn on get without any matching set', () => {
-    // get with no producer — different bug class, not SP95.
+  it('does NOT warn on get without any matching set (different bug class)', () => {
     const src = `
       live_loop :reader do
         play get(:never_set), release: 0.4
@@ -49,7 +54,7 @@ describe('Sp95Lint — cross-loop set/get (#350)', () => {
       end
     `
     const w = detectSp95Limitations(src)
-    expect(w.filter(x => x.pattern === 'cross-loop-set-get')).toEqual([])
+    expect(w).toEqual([])
   })
 
   it('does NOT warn on set without any matching get', () => {
@@ -60,25 +65,25 @@ describe('Sp95Lint — cross-loop set/get (#350)', () => {
       end
     `
     const w = detectSp95Limitations(src)
-    expect(w.filter(x => x.pattern === 'cross-loop-set-get')).toEqual([])
+    expect(w).toEqual([])
   })
 
-  it('catches the function-call form: get(:k)', () => {
+  it('does NOT warn on cross-loop function-call form: get(:k) — NOW supported', () => {
     const src = `
       live_loop :a do; set :x, 1; sleep 1; end
       live_loop :b do; play get(:x); sleep 1; end
     `
     const w = detectSp95Limitations(src)
-    expect(w.some(x => x.pattern === 'cross-loop-set-get')).toBe(true)
+    expect(w).toEqual([])
   })
 
-  it('catches the bareword form: get :k', () => {
+  it('does NOT warn on cross-loop bareword form: get :k — NOW supported', () => {
     const src = `
       live_loop :a do; set :x, 1; sleep 1; end
       live_loop :b do; play get :x; sleep 1; end
     `
     const w = detectSp95Limitations(src)
-    expect(w.some(x => x.pattern === 'cross-loop-set-get')).toBe(true)
+    expect(w).toEqual([])
   })
 })
 
@@ -203,8 +208,8 @@ describe('Sp95Lint — empty / unrelated programs', () => {
   })
 })
 
-describe('Sp95Lint — multiple patterns coexist', () => {
-  it('emits all three when the program contains all three', () => {
+describe('Sp95Lint — #351 patterns still coexist (#350 retired)', () => {
+  it('emits BOTH #351 patterns when the program contains both — and the #350 pattern does NOT contribute', () => {
     const src = `
       live_loop :director do
         set :root, 60
@@ -217,8 +222,10 @@ describe('Sp95Lint — multiple patterns coexist', () => {
       end
     `
     const patterns = new Set(detectSp95Limitations(src).map(w => w.pattern))
-    expect(patterns).toContain('cross-loop-set-get')
+    // #351 detectors are intact:
     expect(patterns).toContain('cue-payload-via-sync-return')
     expect(patterns).toContain('sync-return-indexed')
+    // #350 detector is gone:
+    expect(patterns.size).toBe(2)
   })
 })

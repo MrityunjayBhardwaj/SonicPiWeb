@@ -28,7 +28,9 @@
  */
 
 export interface Sp95Warning {
-  pattern: 'cross-loop-set-get' | 'cue-payload-via-sync-return' | 'sync-return-indexed'
+  // 'cross-loop-set-get' was retired 2026-05-28 once SV47 #350 became
+  // IMPLEMENTED; #351 detectors remain.
+  pattern: 'cue-payload-via-sync-return' | 'sync-return-indexed'
   title: string
   message: string
 }
@@ -78,43 +80,16 @@ function findLiveLoops(src: string): Array<{ name: string; body: string }> {
 }
 
 /**
- * Pattern #350: `set :k` in loop A, `get :k` in loop B, A ≠ B.
- * Map key → set/get sites by enclosing loop name; warn when sets∩gets across
- * different loops. Same-loop set/get is intentionally allowed (works on web).
+ * Pattern #350 cross-loop set/get — RETIRED 2026-05-28 (SV47 slice 2 / commit
+ * 73a4475). The time-indexed Time State + eager b.set at build current_time() +
+ * b.get vt-aware reader + post-sync iteration-vt bump together make the
+ * director/section idiom read the cuer's same-vt value (desktop-matching
+ * {55,59...} on r1). Warning here would be a SV50 false positive and erode the
+ * lint's trust budget. The detector + its emitted warning are removed; the
+ * negative-control assertion (now NO warn on the canonical pattern) is added
+ * in Sp95Lint.test.ts. #351 detectors below are untouched — PLAN-d finalize
+ * owns those.
  */
-function detectCrossLoopSetGet(loops: Array<{ name: string; body: string }>): Sp95Warning[] {
-  const SET_RE = /\bset\s+:([a-zA-Z_][a-zA-Z0-9_]*)\b/g
-  const GET_RE = /\bget\s*\(?\s*:([a-zA-Z_][a-zA-Z0-9_]*)\b/g
-  const setsByKey = new Map<string, Set<string>>()
-  const getsByKey = new Map<string, Set<string>>()
-  for (const lp of loops) {
-    let m: RegExpExecArray | null
-    SET_RE.lastIndex = 0
-    while ((m = SET_RE.exec(lp.body)) !== null) {
-      if (!setsByKey.has(m[1])) setsByKey.set(m[1], new Set())
-      setsByKey.get(m[1])!.add(lp.name)
-    }
-    GET_RE.lastIndex = 0
-    while ((m = GET_RE.exec(lp.body)) !== null) {
-      if (!getsByKey.has(m[1])) getsByKey.set(m[1], new Set())
-      getsByKey.get(m[1])!.add(lp.name)
-    }
-  }
-  const offenders = new Set<string>()
-  for (const [key, setters] of setsByKey) {
-    const getters = getsByKey.get(key)
-    if (!getters) continue
-    // Cross-loop = at least one getter loop that is NOT in the setter set.
-    for (const g of getters) if (!setters.has(g)) offenders.add(key)
-  }
-  if (offenders.size === 0) return []
-  const keys = [...offenders].map(k => `:${k}`).join(', ')
-  return [{
-    pattern: 'cross-loop-set-get',
-    title: 'Cross-loop set/get is a v1 limitation (#350)',
-    message: `Detected set in one live_loop and get(${keys}) in another — the reader will see a stale or null value because set is a deferred runtime step but get is read at build time. Same-loop set/get (or sync-as-gate within one loop) works fine. Workaround: do the set and get inside the SAME live_loop, or use cue+sync (without payload) to gate the read. See SP95 / #350.`,
-  }]
-}
 
 /**
  * Pattern #351-payload: `cue :name, key: value` with kwargs + a matching
@@ -187,9 +162,10 @@ function detectSyncReturnIndexed(src: string): Sp95Warning[] {
  * Sonic Pi piece, so this runs in <1ms.
  */
 export function detectSp95Limitations(src: string): Sp95Warning[] {
-  const loops = findLiveLoops(src)
+  // findLiveLoops kept for the future — only #351 detectors fire today
+  // (#350 cross-loop set/get is now supported, see SV47 IMPLEMENTED).
+  void findLiveLoops
   return [
-    ...detectCrossLoopSetGet(loops),
     ...detectCuePayloadViaSync(src),
     ...detectSyncReturnIndexed(src),
   ]
