@@ -812,6 +812,12 @@ export class SonicPiEngine {
           // ANOTHER live_loop's body still see the correct (innermost) parent.
           const prevBuildBuilder = this.currentBuildBuilder
           this.currentBuildBuilder = builder
+          // SP95(d) #393: wire the scheduler so `b.sync()` awaits the cue
+          // payload mid-build (build-time resolution → post-sync get/e[:val]
+          // read fresh state). Only this audio build path wires it; the
+          // QueryInterpreter/capture build (S2-gated) never does, so an S3
+          // sync loop cannot register a phantom waiter through capture.
+          builder.setSyncContext(scheduler, name)
           try {
             // SP95(d) #393: await so an S3 body can suspend on a scheduler-resolved
             // sync mid-build. For today's synchronous S1/S2 bodies this `await` is

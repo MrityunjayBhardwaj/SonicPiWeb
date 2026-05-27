@@ -50,6 +50,15 @@ export class ProgramBuilder {
   private _currentBuildSeconds: number = 0
   private _currentBeat: number = 0
   private _schedAheadTime: number = 0
+  // SP95(d) #393: scheduler access for build-time sync resolution. When set
+  // (the audio build path wires it before builderFn), `sync` awaits the
+  // scheduler-resolved cue payload mid-build instead of pushing a runtime
+  // step — so the value binds to `e` and post-sync reads (get / e[:val]) run
+  // AFTER the cue fires. Null on manual / capture builders, which keep the
+  // legacy runtime-step path (the QueryInterpreter never wires it, so an
+  // S3 sync loop can't register a phantom waiter through the capture pass).
+  private _syncScheduler: { waitForSync(name: string, taskId: string): Promise<{ args: unknown[]; bpm: number }> } | null = null
+  private _syncTaskId: string | null = null
 
   constructor(seed: number = 0, initialTicks?: Map<string, number>) {
     this.rng = new SeededRandom(seed)
@@ -235,6 +244,21 @@ export class ProgramBuilder {
     if (bpm !== undefined) this._currentBpm = bpm
   }
 
+  /**
+   * SP95(d) #393: give this builder scheduler access so `sync` can await a
+   * cue payload during build (audio path only). The scheduler is the SOLE
+   * resolver — same invariant as scheduleSleep (SV2). Cleared implicitly by
+   * builder recreation each iteration; manual / capture builders never call
+   * this, so their `sync` keeps the legacy runtime-step behavior.
+   */
+  setSyncContext(
+    scheduler: { waitForSync(name: string, taskId: string): Promise<{ args: unknown[]; bpm: number }> },
+    taskId: string,
+  ): void {
+    this._syncScheduler = scheduler
+    this._syncTaskId = taskId
+  }
+
   /** Read the build-phase beat counter (engine persists this across iterations). */
   get currentBeatRaw(): number { return this._currentBeat }
 
@@ -269,8 +293,25 @@ export class ProgramBuilder {
     return this
   }
 
-  sync(name: string, opts?: { bpm_sync?: boolean }): this {
+  sync(name: string, opts?: { bpm_sync?: boolean }): this | Promise<unknown> {
     const bpmSync = opts?.bpm_sync === true
+    // SP95(d) #393: build-time await path. The scheduler resolves the cue
+    // payload through the SAME channel as sleep (a Promise only tick() can
+    // resolve), so the build "blocks" in virtual time exactly like desktop's
+    // `prom.get` (event_history.rb:221, krama SK15). The resolved payload
+    // becomes sync's return value, so `e = sync :beat; e[:val]` binds the
+    // real value and `play get(:root)` after a bare sync reads fresh state.
+    //
+    // Gated to plain `sync` only: `sync_bpm` still needs the runtime step to
+    // mutate task.bpm mid-iteration (#236) — and only when a scheduler is
+    // wired (audio path). Manual / capture builders fall through to the
+    // legacy runtime step, returning `this` for chaining.
+    if (!bpmSync && this._syncScheduler && this._syncTaskId !== null) {
+      const taskId = this._syncTaskId
+      return this._syncScheduler.waitForSync(name, taskId).then(
+        (payload) => syncArgsToMap(payload.args),
+      )
+    }
     this.steps.push(bpmSync ? { tag: 'sync', name, bpmSync: true } : { tag: 'sync', name })
     return this
   }
@@ -281,7 +322,11 @@ export class ProgramBuilder {
    * Matches desktop `core.rb:4490-4494`.
    */
   sync_bpm(name: string): this {
-    return this.sync(name, { bpm_sync: true })
+    // sync_bpm keeps the runtime-step path (it must mutate task.bpm mid-
+    // iteration, #236), so it never takes sync's build-time await branch and
+    // always returns `this`. Push the step directly to keep the return type.
+    this.steps.push({ tag: 'sync', name, bpmSync: true })
+    return this
   }
 
   control(nodeRef: number, params: Record<string, number>): this {
@@ -1181,4 +1226,19 @@ export class ProgramBuilder {
   build(): Program {
     return [...this.steps]
   }
+}
+
+/**
+ * SP95(d) #393: shape the cue args into `sync`'s Ruby-equivalent return value.
+ * Desktop `cue :beat, val: X` → `e = sync :beat` makes `e` the kwargs map, so
+ * `e[:val]` (transpiled `e["val"]`) reads X. Mirrors Sonic Pi's splat of cue
+ * args back to the synced thread:
+ *   - no args        → {}            (bare `cue :name`; bare `sync` ignores it)
+ *   - one arg        → that arg      (kwargs hash → indexable; scalar → as-is)
+ *   - many args      → the array     (positional `cue :n, 1, 2`)
+ */
+function syncArgsToMap(args: unknown[]): unknown {
+  if (args.length === 0) return {}
+  if (args.length === 1) return args[0]
+  return args
 }

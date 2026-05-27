@@ -232,6 +232,15 @@ interface TranspileContext {
   srcLine?: number
   /** Hoisted-loop counter for `loop do` inside `in_thread` (issue #205). */
   inthreadLoopCounter?: { n: number }
+  /**
+   * SP95(d) #393: true while transpiling the *direct* body of a live_loop,
+   * whose wrapper arrow is emitted `async`. Lets `sync` emit `await __b.sync()`
+   * (build-time cue resolution). Propagates through control-flow blocks
+   * (if/for/times/each — same JS function scope) but MUST be reset to false at
+   * every nested non-async function boundary (with_fx/in_thread/define/at/…),
+   * or `await` would land in a non-async arrow → refused run.
+   */
+  asyncBody?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,7 +1032,9 @@ function transpileProgram(node: any, ctx: TranspileContext): string {
 
   // Transpile bare code inside an implicit in_thread (runs once, not forever)
   // Desktop SP runs bare code once — thread terminates at end.
-  const bareCtx: TranspileContext = { ...ctx, insideLoop: true }
+  // SP95(d): bare top-level code runs inside an async `__run_once` live_loop,
+  // so `await __b.sync()` is legal there too.
+  const bareCtx: TranspileContext = { ...ctx, insideLoop: true, asyncBody: true }
   const bareJS = bareCode
     .map(c => '  ' + transpileNode(c, bareCtx))
     .filter(s => s.trim())
@@ -1040,10 +1051,10 @@ function transpileProgram(node: any, ctx: TranspileContext): string {
     if (m === 'loop') {
       const body = c.namedChildren.find((x: any) => x.type === 'do_block' || x.type === 'block')
       if (body) {
-        const bodyCtx: TranspileContext = { ...ctx, insideLoop: true }
+        const bodyCtx: TranspileContext = { ...ctx, insideLoop: true, asyncBody: true }
         const bodyStr = transpileBlockBody(body, bodyCtx)
         const name = `__loop_${topLoopCounter++}`
-        return `live_loop("${name}", (__b) => {\n${bodyStr}\n${ctx.indent}})`
+        return `live_loop("${name}", async (__b) => {\n${bodyStr}\n${ctx.indent}})`
       }
     }
     return transpileNode(c, ctx)
@@ -1052,7 +1063,7 @@ function transpileProgram(node: any, ctx: TranspileContext): string {
   const parts: string[] = []
   if (topJS.length > 0) parts.push(topJS.join('\n'))
   if (bareJS.length > 0) {
-    parts.push(`live_loop("__run_once", (__b) => {\n${bareJS.join('\n')}\n  __b.stop()\n})`)
+    parts.push(`live_loop("__run_once", async (__b) => {\n${bareJS.join('\n')}\n  __b.stop()\n})`)
   }
   if (blockJS.length > 0) parts.push(blockJS.join('\n'))
 
@@ -1234,6 +1245,17 @@ function transpileMethodCall(node: any, ctx: TranspileContext): string {
       const prefix = ctx.insideLoop ? '__b.' : ''
       const args = argsNode ? transpileArgList(argsNode, ctx) : ''
       return `${prefix}${cleanName}(${args})`
+    }
+
+    // SP95(d) #393: `sync` resolves a cue payload at BUILD time (returns the
+    // payload), so `e = sync :beat; e[:val]` and `play get(:root)` after a
+    // bare `sync` read fresh state. Emit `await` only inside an async live_loop
+    // body (asyncBody) — inside with_fx/define/in_thread the arrow is not async,
+    // so sync there falls back to the (non-awaited) runtime-step path. sync_bpm
+    // keeps the runtime step (returns this); awaiting a non-thenable is identity.
+    if ((methodName === 'sync' || methodName === 'sync_bpm') && ctx.asyncBody) {
+      const args = argsNode ? transpileArgList(argsNode, ctx) : ''
+      return `await __b.${methodName}(${args})`
     }
 
     // --- Dispatch by which set the function belongs to ---
@@ -1655,14 +1677,16 @@ function transpileLiveLoop(
     return `/* parse error: live_loop :${name} missing block */`
   }
 
-  const bodyCtx: TranspileContext = { ...ctx, insideLoop: true }
+  // SP95(d) #393: live_loop body is emitted `async` so `await __b.sync()` can
+  // resolve a cue payload mid-build. asyncBody scopes that await to this arrow.
+  const bodyCtx: TranspileContext = { ...ctx, insideLoop: true, asyncBody: true }
   const bodyStr = transpileBlockBody(blockNode, bodyCtx)
 
   // sync: option — pass as registration option (one-time sync before first iteration),
   // NOT as b.sync() inside the body (which would re-sync every iteration).
   const optsArg = syncName ? `{sync: "${syncName}"}, ` : ''
 
-  return `live_loop("${name}", ${optsArg}(__b) => {\n${bodyStr}\n${ctx.indent}})`
+  return `live_loop("${name}", ${optsArg}async (__b) => {\n${bodyStr}\n${ctx.indent}})`
 }
 
 function transpileDefine(
