@@ -1,5 +1,6 @@
 import { VirtualTimeScheduler, DEFAULT_SCHED_AHEAD_TIME } from './VirtualTimeScheduler'
 import { ProgramBuilder } from './ProgramBuilder'
+import { TimeState } from './TimeState'
 import { runProgram, type AudioContext as AudioCtx } from './interpreters/AudioInterpreter'
 import { queryLoopProgram, type QueryEvent } from './interpreters/QueryInterpreter'
 import { SuperSonicBridge, type SuperSonicBridgeOptions } from './SuperSonicBridge'
@@ -180,8 +181,12 @@ export class SonicPiEngine {
    * scheduler-aware and time-stamped correctly.
    */
   readonly midiBridge = new MidiBridge()
-  /** Global key-value store — shared across all loops via get/set */
-  private globalStore = new Map<string | symbol, unknown>()
+  /** Global key-value store — shared across all loops via get/set.
+   *  SP95(d) #350 slice 2: virtual-time-indexed TimeState (was a plain Map).
+   *  Writes carry the writer's current_time(); reads resolve "last set ≤ reader
+   *  vt". A back-compat facade (.get(key)/.size/.clear) keeps Map-shaped tests
+   *  green. Cleared only on dispose (SK14). */
+  private globalStore = new TimeState()
   /** User-defined functions — `define`/`ndefine` register here. Seeded back into the
    *  next eval's scopeBase so removing a `define` line from the buffer does not
    *  break a still-running live_loop that calls it. (#215) */
@@ -818,6 +823,9 @@ export class SonicPiEngine {
           // QueryInterpreter/capture build (S2-gated) never does, so an S3
           // sync loop cannot register a phantom waiter through capture.
           builder.setSyncContext(scheduler, name)
+          // SP95(d) #350 slice 2: wire the Time State so `b.set` writes eagerly
+          // at current_time() and `b.get` reads at the reader's current_time().
+          builder.setTimeStateContext(this.globalStore)
           try {
             // SP95(d) #393: await so an S3 body can suspend on a scheduler-resolved
             // sync mid-build. For today's synchronous S1/S2 bodies this `await` is
@@ -1054,8 +1062,19 @@ export class SonicPiEngine {
       // so `get["key"]` would return undefined. The Proxy routes property access
       // through the store while leaving `get(...)` calls and standard function
       // internals (name, length, call, apply, Symbol.toPrimitive, ...) alone.
+      // SP95(d) #350 slice 2: bare top-level `set` runs through the :__run_once
+      // builder (it gets setIterationContext, so current_time() resolves) —
+      // routing through b.set gives it the same eager write as loop bodies. If
+      // no builder is active (defensive fallback only), write at vt 0 against
+      // the Time State directly. (get is still the facade read here; Task 3
+      // routes get through b.get so it reads at the reader's vt.)
       const set = (key: string | symbol, value: unknown): void => {
-        this.globalStore.set(key, value)
+        const b = this.currentBuildBuilder
+        if (b) {
+          b.set(key, value)
+        } else {
+          this.globalStore.set(key, value, 0)
+        }
       }
       const storeGet = (key: string | symbol): unknown => this.globalStore.get(key) ?? null
       const getFn = (key: string | symbol): unknown => storeGet(key)

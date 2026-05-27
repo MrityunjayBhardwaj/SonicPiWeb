@@ -59,6 +59,13 @@ export class ProgramBuilder {
   // S3 sync loop can't register a phantom waiter through the capture pass).
   private _syncScheduler: { waitForSync(name: string, taskId: string): Promise<{ args: unknown[]; bpm: number }> } | null = null
   private _syncTaskId: string | null = null
+  // SP95(d) #350 slice 2: the virtual-time-indexed Time State the engine wires
+  // during build (setTimeStateContext). `b.set` writes EAGERLY here at
+  // current_time() so the write lands before the loop's first await — giving a
+  // cross-loop post-sync `get` a write-before-read happens-before by causation,
+  // not by scheduler wake order. Null on builders that were never wired (the
+  // deferred {tag:'set'} step still records the write at interpret time).
+  private _timeState: { set(key: string | symbol, value: unknown, t: number): void; get(key: string | symbol, t: number): unknown } | null = null
 
   constructor(seed: number = 0, initialTicks?: Map<string, number>) {
     this.rng = new SeededRandom(seed)
@@ -257,6 +264,18 @@ export class ProgramBuilder {
   ): void {
     this._syncScheduler = scheduler
     this._syncTaskId = taskId
+  }
+
+  /**
+   * SP95(d) #350 slice 2: wire the virtual-time-indexed Time State so `b.set`
+   * can apply eagerly at build current_time() and `b.get` can read at the
+   * reader's current_time(). Set alongside setIterationContext/setSyncContext
+   * during the engine's build setup; null on builders that never wire it.
+   */
+  setTimeStateContext(
+    timeState: { set(key: string | symbol, value: unknown, t: number): void; get(key: string | symbol, t: number): unknown },
+  ): void {
+    this._timeState = timeState
   }
 
   /** Read the build-phase beat counter (engine persists this across iterations). */
@@ -776,8 +795,24 @@ export class ProgramBuilder {
   current_arg_checks(): boolean { return this._argChecks }
   current_timing_guarantees(): boolean { return this._timingGuarantees }
 
-  /** Deferred set — fires at runtime (interleaved with sleeps). */
+  /**
+   * `set` does BOTH (SP95(d) #350 slice 2, Decision Q3):
+   *   1. EAGERLY writes to the Time State at current_time() — synchronously,
+   *      during build, before the loop's first await. This is the ORDERING fix:
+   *      a cross-loop post-sync `get` (a microtask queued by the cuer's cue) can
+   *      only run once the writer yields, so the eager write happens-before it
+   *      by causation — independent of scheduler wake order.
+   *   2. STILL pushes the deferred {tag:'set'} step (SV20/SP41 contract — set
+   *      stays a builder method with a step, DslBuilderContract green) for the
+   *      QueryInterpreter / capture / event-stream paths.
+   * The timestamp is current_time() AT the call, which has already advanced by
+   * any preceding intra-iteration b.sleep — so `set :x,1; sleep 2; set :x,2`
+   * records x=1@T and x=2@(T+2) (SV20 preserved). The interpreter's deferred
+   * `case 'set'` is a no-op on the Time State path so this stays the single
+   * write per (key, build-vt) — no phantom shadow entry at a different vt.
+   */
   set(key: string | symbol, value: unknown): this {
+    this._timeState?.set(key, value, this.current_time())
     this.steps.push({ tag: 'set', key, value })
     return this
   }
