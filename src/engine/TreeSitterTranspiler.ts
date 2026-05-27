@@ -253,7 +253,7 @@ interface TranspileContext {
  */
 const BUILDER_METHODS = new Set([
   // Core
-  'play', 'sleep', 'wait', 'sample', 'sync', 'sync_bpm', 'cue', 'set',
+  'play', 'sleep', 'wait', 'sample', 'sync', 'sync_bpm', 'cue', 'set', 'get',
   'use_synth', 'use_bpm', 'use_random_seed',
   'control', 'stop', 'live_audio',
   'with_fx', 'in_thread', 'at',
@@ -548,6 +548,17 @@ function transpileNode(node: any, ctx: TranspileContext): string {
       // Top-level bare callables — no b. prefix, just append ()
       if (BARE_CALLABLE_TOP_LEVEL.has(name)) {
         return `${name}()`
+      }
+
+      // SP95(d) #350 slice 2: bare `get` identifier (e.g. the bracket form
+      // `get[:k]` → element_reference whose object is the identifier `get`)
+      // must route to the builder's vt-aware `get` Proxy inside a loop, so the
+      // bracket read happens at the reader's current_time() (SV28-safe). The
+      // call form `get(:k)` is handled via BUILDER_METHODS. At top level it
+      // stays the sandbox closure (no prefix), which routes through the active
+      // build builder.
+      if (name === 'get' && ctx.insideLoop) {
+        return '__b.get'
       }
 
       return name

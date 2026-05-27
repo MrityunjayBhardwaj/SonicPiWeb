@@ -817,6 +817,41 @@ export class ProgramBuilder {
     return this
   }
 
+  /**
+   * `get` reads the Time State at the READER's virtual time (SP95(d) #350
+   * slice 2). Routing through the builder (rather than the shared
+   * SonicPiEngine `get` closure) makes the reader vt come from the body's OWN
+   * builder — SV28-safe across interleaved/awaited builds, the same reason
+   * Slice 1 routed `sync` through `b.sync`.
+   *
+   * Returns a Proxy callable so BOTH Sonic Pi forms resolve to the same
+   * vt-aware lookup:
+   *   - `get(:k)`  → transpiles to `__b.get("k")` → the Proxy's apply trap
+   *   - `get[:k]`  → transpiles to `__b.get["k"]` → the Proxy's get trap
+   * Reads `current_time()` AT the call site (post-sync, post-sleep), never a
+   * cached value. Falls back to the no-vt facade (latest value) if no Time
+   * State is wired. `?? null` matches the prior sandbox-get behavior.
+   */
+  get get(): ((key: string | symbol) => unknown) & Record<string | symbol, unknown> {
+    const read = (key: string | symbol): unknown => {
+      if (!this._timeState) return null
+      return this._timeState.get(key, this.current_time()) ?? null
+    }
+    return new Proxy(read, {
+      apply(_target, _thisArg, args) {
+        return read(args[0] as string | symbol)
+      },
+      get(target, property, receiver) {
+        // Real function internals (name, length, call, apply, Symbol.*) fall
+        // through to the function so the value stays a normal callable.
+        if (typeof property === 'symbol' || property in target) {
+          return Reflect.get(target, property, receiver)
+        }
+        return read(property)
+      },
+    }) as ((key: string | symbol) => unknown) & Record<string | symbol, unknown>
+  }
+
   puts(...args: unknown[]): this {
     const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ')
     this.steps.push({ tag: 'print', message: msg })

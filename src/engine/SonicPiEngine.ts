@@ -1076,7 +1076,15 @@ export class SonicPiEngine {
           this.globalStore.set(key, value, 0)
         }
       }
-      const storeGet = (key: string | symbol): unknown => this.globalStore.get(key) ?? null
+      // SP95(d) #350 slice 2: bare top-level `get` (and any path that hits this
+      // sandbox closure rather than the in-loop __b.get) reads vt-aware through
+      // the active build builder (the :__run_once builder gets a current_time()).
+      // Falls back to the no-vt facade (latest value) if no builder is active.
+      const storeGet = (key: string | symbol): unknown => {
+        const b = this.currentBuildBuilder
+        if (b) return b.get(key)
+        return this.globalStore.get(key) ?? null
+      }
       const getFn = (key: string | symbol): unknown => storeGet(key)
       const get = new Proxy(getFn, {
         get(target, property, receiver) {
