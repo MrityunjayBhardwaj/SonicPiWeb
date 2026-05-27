@@ -1,22 +1,31 @@
 /**
- * Reorder-invariance HARD gate (SV47 / #350 slice 2 task 6).
+ * Web self-consistency under loop-declaration reorder (SV47 / #350 slice 2).
  *
- * Decision Q2: correctness rests on (i) causation (the cuer applies its eager
- * `set` before it yields; the syncer's post-sync `get` is a microtask after the
- * yield) and (ii) the inclusive "last ≤ t" time-index. It does NOT rest on the
- * scheduler's same-vt wake order — which is insertionOrder-keyed
- * (VirtualTimeScheduler.ts:194-196, the v1 plan's FAIL-1 was the false
- * `(time, taskId)` total-order claim).
+ * WHAT THIS PROVES: our engine reads the SAME cross-loop set/get value
+ * regardless of the source order in which the two live_loops are declared —
+ * {55, 59} for both director-first and player-first. The #350 value-phase fix
+ * (eager `b.set` at build + inclusive "last ≤ reader-vt" time-index) does NOT
+ * leak a source-order / insertionOrder dependence (our scheduler ties same-vt
+ * wakes on insertionOrder, VirtualTimeScheduler.ts:194-196 — NOT a desktop-style
+ * total order; the `(time, taskId)` docstring at :152 is aspirational).
  *
- * The reorder-invariance probe: declare the player (reader) BEFORE the director
- * (writer) in source. Insertion order now favors the player; if the fix had
- * leaked a source-order dependence, the player would resume first and read a
- * stale 52. The test demands identical {55, 59} prefixes for BOTH declaration
- * orders — proving the design depends on causation, not on which asyncFn the
- * scheduler resumes first.
+ * WHAT THIS DOES *NOT* CLAIM: desktop parity on the reversed order. Grounded +
+ * reproduced ×3 (2026-05-28), DESKTOP IS declaration-order-DEPENDENT here:
+ * director-first → {55,59}, player-first → {52,57}. Root: desktop `sync` =
+ * get_next "next cue strictly AFTER my time t" (event_history.rb:215,542) over
+ * the full CueEvent total order (t, p, i, d…); at equal vt the (p=priority,
+ * i=thread_id, d=thread_delta) thread-identity fields (core.rb:114-119, assigned
+ * at thread spawn = declaration order) break the tie, so player-first catches the
+ * t=0 cue (index 0 = 52). We do NOT implement that (t,p,i,d) total order — our
+ * strict-vt-after wake-phase (Slice 1) collapses the equal-vt case, making web
+ * self-consistent instead. Matching desktop's order-dependence is a separate
+ * wake-phase/event-ordering parity feature (Slice 3, deferred — see GitHub issue
+ * + memory sp95_350_reversed_order_total_order_gap). r1 NORMAL order is the #350
+ * gate and is a stable Tier-1 PITCH-MATCH ×3.
  *
- * Companion Level-3 reproducers (Task 7): /tmp/s8/r1_director_section.rb +
- * /tmp/s8/r1_director_section_reversed.rb.
+ * Companion Level-3 reproducers: /tmp/s8/r1_director_section.rb (normal — desktop
+ * PITCH-MATCH) + /tmp/s8/r1_director_section_reversed.rb (reversed — desktop
+ * diverges to {52,57} BY DESIGN, web stays {55,59}).
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
@@ -76,19 +85,22 @@ async function playerPrefix(src: string, n = 2): Promise<number[]> {
   return notes.slice(0, n)
 }
 
-describe('Reorder-invariance HARD gate (SV47 / #350)', () => {
+describe('Web self-consistency under loop reorder (SV47 / #350)', () => {
   beforeEach(() => {
     delete (globalThis as Record<string, unknown>).SuperSonic
   })
 
-  it('director-first and player-first produce the IDENTICAL prefix {55, 59}', async () => {
+  it('director-first and player-first produce the IDENTICAL web prefix {55, 59}', async () => {
     const a = await playerPrefix(DIRECTOR_FIRST, 2)
     const b = await playerPrefix(PLAYER_FIRST, 2)
-    // Each individually matches desktop's {55, 59} — the value-phase fix.
+    // director-first matches desktop's {55, 59} — the #350 value-phase fix
+    // (Level-3 PITCH-MATCH ×3). player-first is web's self-consistent result;
+    // desktop diverges to {52,57} here BY DESIGN (the (t,p,i,d) total-order gap,
+    // Slice 3) — NOT asserted against desktop. See file header.
     expect(a).toEqual([55, 59])
     expect(b).toEqual([55, 59])
-    // And they match each other — the reorder-invariance gate. If either side
-    // leaks a source-order / insertionOrder dependence, they diverge here.
+    // The two web prefixes match each other — web does NOT leak a source-order /
+    // insertionOrder dependence. If it did, they would diverge here.
     expect(b).toEqual(a)
   })
 })
