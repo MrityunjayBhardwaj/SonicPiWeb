@@ -57,7 +57,10 @@ export class ProgramBuilder {
   // AFTER the cue fires. Null on manual / capture builders, which keep the
   // legacy runtime-step path (the QueryInterpreter never wires it, so an
   // S3 sync loop can't register a phantom waiter through the capture pass).
-  private _syncScheduler: { waitForSync(name: string, taskId: string): Promise<{ args: unknown[]; bpm: number }> } | null = null
+  private _syncScheduler: {
+    waitForSync(name: string, taskId: string): Promise<{ args: unknown[]; bpm: number }>
+    getTask?(taskId: string): { virtualTime: number } | undefined
+  } | null = null
   private _syncTaskId: string | null = null
   // SP95(d) #350 slice 2: the virtual-time-indexed Time State the engine wires
   // during build (setTimeStateContext). `b.set` writes EAGERLY here at
@@ -259,7 +262,10 @@ export class ProgramBuilder {
    * this, so their `sync` keeps the legacy runtime-step behavior.
    */
   setSyncContext(
-    scheduler: { waitForSync(name: string, taskId: string): Promise<{ args: unknown[]; bpm: number }> },
+    scheduler: {
+      waitForSync(name: string, taskId: string): Promise<{ args: unknown[]; bpm: number }>
+      getTask?(taskId: string): { virtualTime: number } | undefined
+    },
     taskId: string,
   ): void {
     this._syncScheduler = scheduler
@@ -327,8 +333,29 @@ export class ProgramBuilder {
     // legacy runtime step, returning `this` for chaining.
     if (!bpmSync && this._syncScheduler && this._syncTaskId !== null) {
       const taskId = this._syncTaskId
-      return this._syncScheduler.waitForSync(name, taskId).then(
-        (payload) => syncArgsToMap(payload.args),
+      const scheduler = this._syncScheduler
+      // Capture pre-sync task vt so we can compute the delta the cue's wake
+      // injected (waiterTask.virtualTime = cueVirtualTime, fireCue path). The
+      // builder's current_time() = _iterationStartAudioTime + _currentBuildSeconds,
+      // none of which advance on await; we add the delta into _currentBuildSeconds
+      // so a post-sync b.get / b.set / current_time reads the cuer's vt, not the
+      // syncer's frozen iteration-start. The plan's pre-mortem (a): "Confirm
+      // current_time() advances across await b.sync ... before wiring" — this
+      // closes that gap. (#350 / SV47 slice 2.)
+      const taskBefore = scheduler.getTask?.(taskId)?.virtualTime
+      return scheduler.waitForSync(name, taskId).then(
+        (payload) => {
+          const taskAfter = scheduler.getTask?.(taskId)?.virtualTime
+          if (typeof taskBefore === 'number' && typeof taskAfter === 'number') {
+            const delta = taskAfter - taskBefore
+            // Defensive: a cue should advance the syncer's vt monotonically.
+            // A negative delta would mean a cuer fired at a past vt — Slice 1's
+            // strictly-after gate (VirtualTimeScheduler.ts:425) forbids that,
+            // but guard anyway so we never rewind current_time().
+            if (delta > 0) this._currentBuildSeconds += delta
+          }
+          return syncArgsToMap(payload.args)
+        },
       )
     }
     this.steps.push(bpmSync ? { tag: 'sync', name, bpmSync: true } : { tag: 'sync', name })
