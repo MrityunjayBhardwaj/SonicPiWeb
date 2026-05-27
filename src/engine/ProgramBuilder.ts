@@ -50,6 +50,25 @@ export class ProgramBuilder {
   private _currentBuildSeconds: number = 0
   private _currentBeat: number = 0
   private _schedAheadTime: number = 0
+  // SP95(d) #393: scheduler access for build-time sync resolution. When set
+  // (the audio build path wires it before builderFn), `sync` awaits the
+  // scheduler-resolved cue payload mid-build instead of pushing a runtime
+  // step — so the value binds to `e` and post-sync reads (get / e[:val]) run
+  // AFTER the cue fires. Null on manual / capture builders, which keep the
+  // legacy runtime-step path (the QueryInterpreter never wires it, so an
+  // S3 sync loop can't register a phantom waiter through the capture pass).
+  private _syncScheduler: {
+    waitForSync(name: string, taskId: string): Promise<{ args: unknown[]; bpm: number }>
+    getTask?(taskId: string): { virtualTime: number } | undefined
+  } | null = null
+  private _syncTaskId: string | null = null
+  // SP95(d) #350 slice 2: the virtual-time-indexed Time State the engine wires
+  // during build (setTimeStateContext). `b.set` writes EAGERLY here at
+  // current_time() so the write lands before the loop's first await — giving a
+  // cross-loop post-sync `get` a write-before-read happens-before by causation,
+  // not by scheduler wake order. Null on builders that were never wired (the
+  // deferred {tag:'set'} step still records the write at interpret time).
+  private _timeState: { set(key: string | symbol, value: unknown, t: number): void; get(key: string | symbol, t: number): unknown } | null = null
 
   constructor(seed: number = 0, initialTicks?: Map<string, number>) {
     this.rng = new SeededRandom(seed)
@@ -235,6 +254,36 @@ export class ProgramBuilder {
     if (bpm !== undefined) this._currentBpm = bpm
   }
 
+  /**
+   * SP95(d) #393: give this builder scheduler access so `sync` can await a
+   * cue payload during build (audio path only). The scheduler is the SOLE
+   * resolver — same invariant as scheduleSleep (SV2). Cleared implicitly by
+   * builder recreation each iteration; manual / capture builders never call
+   * this, so their `sync` keeps the legacy runtime-step behavior.
+   */
+  setSyncContext(
+    scheduler: {
+      waitForSync(name: string, taskId: string): Promise<{ args: unknown[]; bpm: number }>
+      getTask?(taskId: string): { virtualTime: number } | undefined
+    },
+    taskId: string,
+  ): void {
+    this._syncScheduler = scheduler
+    this._syncTaskId = taskId
+  }
+
+  /**
+   * SP95(d) #350 slice 2: wire the virtual-time-indexed Time State so `b.set`
+   * can apply eagerly at build current_time() and `b.get` can read at the
+   * reader's current_time(). Set alongside setIterationContext/setSyncContext
+   * during the engine's build setup; null on builders that never wire it.
+   */
+  setTimeStateContext(
+    timeState: { set(key: string | symbol, value: unknown, t: number): void; get(key: string | symbol, t: number): unknown },
+  ): void {
+    this._timeState = timeState
+  }
+
   /** Read the build-phase beat counter (engine persists this across iterations). */
   get currentBeatRaw(): number { return this._currentBeat }
 
@@ -269,8 +318,46 @@ export class ProgramBuilder {
     return this
   }
 
-  sync(name: string, opts?: { bpm_sync?: boolean }): this {
+  sync(name: string, opts?: { bpm_sync?: boolean }): this | Promise<unknown> {
     const bpmSync = opts?.bpm_sync === true
+    // SP95(d) #393: build-time await path. The scheduler resolves the cue
+    // payload through the SAME channel as sleep (a Promise only tick() can
+    // resolve), so the build "blocks" in virtual time exactly like desktop's
+    // `prom.get` (event_history.rb:221, krama SK15). The resolved payload
+    // becomes sync's return value, so `e = sync :beat; e[:val]` binds the
+    // real value and `play get(:root)` after a bare sync reads fresh state.
+    //
+    // Gated to plain `sync` only: `sync_bpm` still needs the runtime step to
+    // mutate task.bpm mid-iteration (#236) — and only when a scheduler is
+    // wired (audio path). Manual / capture builders fall through to the
+    // legacy runtime step, returning `this` for chaining.
+    if (!bpmSync && this._syncScheduler && this._syncTaskId !== null) {
+      const taskId = this._syncTaskId
+      const scheduler = this._syncScheduler
+      // Capture pre-sync task vt so we can compute the delta the cue's wake
+      // injected (waiterTask.virtualTime = cueVirtualTime, fireCue path). The
+      // builder's current_time() = _iterationStartAudioTime + _currentBuildSeconds,
+      // none of which advance on await; we add the delta into _currentBuildSeconds
+      // so a post-sync b.get / b.set / current_time reads the cuer's vt, not the
+      // syncer's frozen iteration-start. The plan's pre-mortem (a): "Confirm
+      // current_time() advances across await b.sync ... before wiring" — this
+      // closes that gap. (#350 / SV47 slice 2.)
+      const taskBefore = scheduler.getTask?.(taskId)?.virtualTime
+      return scheduler.waitForSync(name, taskId).then(
+        (payload) => {
+          const taskAfter = scheduler.getTask?.(taskId)?.virtualTime
+          if (typeof taskBefore === 'number' && typeof taskAfter === 'number') {
+            const delta = taskAfter - taskBefore
+            // Defensive: a cue should advance the syncer's vt monotonically.
+            // A negative delta would mean a cuer fired at a past vt — Slice 1's
+            // strictly-after gate (VirtualTimeScheduler.ts:425) forbids that,
+            // but guard anyway so we never rewind current_time().
+            if (delta > 0) this._currentBuildSeconds += delta
+          }
+          return syncArgsToMap(payload.args)
+        },
+      )
+    }
     this.steps.push(bpmSync ? { tag: 'sync', name, bpmSync: true } : { tag: 'sync', name })
     return this
   }
@@ -281,7 +368,11 @@ export class ProgramBuilder {
    * Matches desktop `core.rb:4490-4494`.
    */
   sync_bpm(name: string): this {
-    return this.sync(name, { bpm_sync: true })
+    // sync_bpm keeps the runtime-step path (it must mutate task.bpm mid-
+    // iteration, #236), so it never takes sync's build-time await branch and
+    // always returns `this`. Push the step directly to keep the return type.
+    this.steps.push({ tag: 'sync', name, bpmSync: true })
+    return this
   }
 
   control(nodeRef: number, params: Record<string, number>): this {
@@ -731,10 +822,61 @@ export class ProgramBuilder {
   current_arg_checks(): boolean { return this._argChecks }
   current_timing_guarantees(): boolean { return this._timingGuarantees }
 
-  /** Deferred set — fires at runtime (interleaved with sleeps). */
+  /**
+   * `set` does BOTH (SP95(d) #350 slice 2, Decision Q3):
+   *   1. EAGERLY writes to the Time State at current_time() — synchronously,
+   *      during build, before the loop's first await. This is the ORDERING fix:
+   *      a cross-loop post-sync `get` (a microtask queued by the cuer's cue) can
+   *      only run once the writer yields, so the eager write happens-before it
+   *      by causation — independent of scheduler wake order.
+   *   2. STILL pushes the deferred {tag:'set'} step (SV20/SP41 contract — set
+   *      stays a builder method with a step, DslBuilderContract green) for the
+   *      QueryInterpreter / capture / event-stream paths.
+   * The timestamp is current_time() AT the call, which has already advanced by
+   * any preceding intra-iteration b.sleep — so `set :x,1; sleep 2; set :x,2`
+   * records x=1@T and x=2@(T+2) (SV20 preserved). The interpreter's deferred
+   * `case 'set'` is a no-op on the Time State path so this stays the single
+   * write per (key, build-vt) — no phantom shadow entry at a different vt.
+   */
   set(key: string | symbol, value: unknown): this {
+    this._timeState?.set(key, value, this.current_time())
     this.steps.push({ tag: 'set', key, value })
     return this
+  }
+
+  /**
+   * `get` reads the Time State at the READER's virtual time (SP95(d) #350
+   * slice 2). Routing through the builder (rather than the shared
+   * SonicPiEngine `get` closure) makes the reader vt come from the body's OWN
+   * builder — SV28-safe across interleaved/awaited builds, the same reason
+   * Slice 1 routed `sync` through `b.sync`.
+   *
+   * Returns a Proxy callable so BOTH Sonic Pi forms resolve to the same
+   * vt-aware lookup:
+   *   - `get(:k)`  → transpiles to `__b.get("k")` → the Proxy's apply trap
+   *   - `get[:k]`  → transpiles to `__b.get["k"]` → the Proxy's get trap
+   * Reads `current_time()` AT the call site (post-sync, post-sleep), never a
+   * cached value. Falls back to the no-vt facade (latest value) if no Time
+   * State is wired. `?? null` matches the prior sandbox-get behavior.
+   */
+  get get(): ((key: string | symbol) => unknown) & Record<string | symbol, unknown> {
+    const read = (key: string | symbol): unknown => {
+      if (!this._timeState) return null
+      return this._timeState.get(key, this.current_time()) ?? null
+    }
+    return new Proxy(read, {
+      apply(_target, _thisArg, args) {
+        return read(args[0] as string | symbol)
+      },
+      get(target, property, receiver) {
+        // Real function internals (name, length, call, apply, Symbol.*) fall
+        // through to the function so the value stays a normal callable.
+        if (typeof property === 'symbol' || property in target) {
+          return Reflect.get(target, property, receiver)
+        }
+        return read(property)
+      },
+    }) as ((key: string | symbol) => unknown) & Record<string | symbol, unknown>
   }
 
   puts(...args: unknown[]): this {
@@ -1181,4 +1323,19 @@ export class ProgramBuilder {
   build(): Program {
     return [...this.steps]
   }
+}
+
+/**
+ * SP95(d) #393: shape the cue args into `sync`'s Ruby-equivalent return value.
+ * Desktop `cue :beat, val: X` → `e = sync :beat` makes `e` the kwargs map, so
+ * `e[:val]` (transpiled `e["val"]`) reads X. Mirrors Sonic Pi's splat of cue
+ * args back to the synced thread:
+ *   - no args        → {}            (bare `cue :name`; bare `sync` ignores it)
+ *   - one arg        → that arg      (kwargs hash → indexable; scalar → as-is)
+ *   - many args      → the array     (positional `cue :n, 1, 2`)
+ */
+function syncArgsToMap(args: unknown[]): unknown {
+  if (args.length === 0) return {}
+  if (args.length === 1) return args[0]
+  return args
 }

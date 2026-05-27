@@ -50,12 +50,12 @@ describe('sync/cue', () => {
       await runProgram(metroProgram, makeAudioCtx(scheduler, 'metro', eventStream, nodeRefMap))
     })
 
-    // Player loop: sync on 'tick', play 72 (proof sync resolved), then park
-    const playerProgram = new ProgramBuilder(0)
-      .sync('tick')
-      .play(72)
-      .sleep(999999)
-      .build()
+    // Player loop: sync on 'tick', play 72 (proof sync resolved), then park.
+    // Manual builder (no scheduler wired) → sync uses the legacy runtime-step
+    // path; call it as a statement since its return type is now a union (SP95d).
+    const playerBuilder = new ProgramBuilder(0)
+    playerBuilder.sync('tick')
+    const playerProgram = playerBuilder.play(72).sleep(999999).build()
 
     scheduler.registerLoop('player', async () => {
       await runProgram(playerProgram, makeAudioCtx(scheduler, 'player', eventStream, nodeRefMap))
@@ -101,23 +101,19 @@ describe('sync/cue', () => {
       await runProgram(sourceProgram, makeAudioCtx(scheduler, 'source', eventStream, nodeRefMap))
     })
 
-    // Waiter 1: sync on 'go', play 60 (proof), park
-    const waiter1Program = new ProgramBuilder(0)
-      .sync('go')
-      .play(60)
-      .sleep(999999)
-      .build()
+    // Waiter 1: sync on 'go', play 60 (proof), park (legacy runtime-step path)
+    const waiter1Builder = new ProgramBuilder(0)
+    waiter1Builder.sync('go')
+    const waiter1Program = waiter1Builder.play(60).sleep(999999).build()
 
     scheduler.registerLoop('waiter1', async () => {
       await runProgram(waiter1Program, makeAudioCtx(scheduler, 'waiter1', eventStream, nodeRefMap))
     })
 
-    // Waiter 2: sync on 'go', play 72 (proof), park
-    const waiter2Program = new ProgramBuilder(0)
-      .sync('go')
-      .play(72)
-      .sleep(999999)
-      .build()
+    // Waiter 2: sync on 'go', play 72 (proof), park (legacy runtime-step path)
+    const waiter2Builder = new ProgramBuilder(0)
+    waiter2Builder.sync('go')
+    const waiter2Program = waiter2Builder.play(72).sleep(999999).build()
 
     scheduler.registerLoop('waiter2', async () => {
       await runProgram(waiter2Program, makeAudioCtx(scheduler, 'waiter2', eventStream, nodeRefMap))
@@ -325,5 +321,72 @@ describe('sync/cue', () => {
     await flushMicrotasks()
 
     expect(followerTask.bpm).toBe(200)
+  })
+})
+
+describe('sync/cue — SP95(d) build-time payload + wake-phase (#350/#351)', () => {
+  it('build-time sync returns the cue payload map; e[:val] reads it', async () => {
+    const scheduler = new VirtualTimeScheduler({ getAudioTime: () => 0, schedAheadTime: 100 })
+    scheduler.registerLoop('receiver', async () => {})
+    scheduler.registerLoop('sender', async () => {})
+    const receiver = scheduler.getTask('receiver')!
+    const sender = scheduler.getTask('sender')!
+    receiver.virtualTime = 0
+
+    // Builder wired with scheduler (audio build path) → sync awaits + returns payload.
+    const b = new ProgramBuilder(0)
+    b.setSyncContext(scheduler, 'receiver')
+    const pending = b.sync('beat')
+    expect(pending).toBeInstanceOf(Promise)
+
+    // Cue fires strictly later (vt=1) carrying a kwargs payload.
+    sender.virtualTime = 1
+    scheduler.fireCue('beat', 'sender', [{ val: 64 }])
+    const payload = (await pending) as Record<string, unknown>
+    // Ruby `e = sync :beat; e[:val]` → e is the kwargs map, e["val"] === 64.
+    expect(payload).toEqual({ val: 64 })
+    expect(payload['val']).toBe(64)
+  })
+
+  it('a freshly-started sync misses a SIMULTANEOUS cue and catches the next (wake-phase, SK15)', async () => {
+    const scheduler = new VirtualTimeScheduler({ getAudioTime: () => 0, schedAheadTime: 100 })
+    scheduler.registerLoop('receiver', async () => {})
+    scheduler.registerLoop('sender', async () => {})
+    const receiver = scheduler.getTask('receiver')!
+    const sender = scheduler.getTask('sender')!
+    receiver.virtualTime = 0
+
+    let resolved: unknown = 'PENDING'
+    scheduler.waitForSync('beat', 'receiver').then((p) => { resolved = p })
+
+    // Cue at the SAME virtual instant the receiver registered (vt=0) — desktop's
+    // sender fires its first cue before the receiver is ready, so this is missed.
+    sender.virtualTime = 0
+    scheduler.fireCue('beat', 'sender', [{ val: 60 }])
+    await flushMicrotasks()
+    expect(resolved).toBe('PENDING') // simultaneous cue NOT delivered
+
+    // Next cue, strictly later (vt=0.5) — this one is caught.
+    sender.virtualTime = 0.5
+    scheduler.fireCue('beat', 'sender', [{ val: 64 }])
+    await flushMicrotasks()
+    expect(resolved).toEqual({ args: [{ val: 64 }], bpm: sender.bpm })
+  })
+
+  it('manual builder sync (no scheduler) keeps the legacy runtime-step path + returns this', () => {
+    const b = new ProgramBuilder(0)
+    const ret = b.sync('x')
+    expect(ret).toBe(b) // chainable; runtime sync STEP, not a Promise
+    expect(b.build()).toEqual([{ tag: 'sync', name: 'x' }])
+  })
+
+  it('sync_bpm always uses the runtime step (never build-time await), even with scheduler wired', () => {
+    const scheduler = new VirtualTimeScheduler({ getAudioTime: () => 0, schedAheadTime: 100 })
+    scheduler.registerLoop('r', async () => {})
+    const b = new ProgramBuilder(0)
+    b.setSyncContext(scheduler, 'r')
+    const ret = b.sync_bpm('beat')
+    expect(ret).toBe(b)
+    expect(b.build()).toEqual([{ tag: 'sync', name: 'beat', bpmSync: true }])
   })
 })

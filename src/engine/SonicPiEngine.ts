@@ -1,5 +1,6 @@
 import { VirtualTimeScheduler, DEFAULT_SCHED_AHEAD_TIME } from './VirtualTimeScheduler'
 import { ProgramBuilder } from './ProgramBuilder'
+import { TimeState } from './TimeState'
 import { runProgram, type AudioContext as AudioCtx } from './interpreters/AudioInterpreter'
 import { queryLoopProgram, type QueryEvent } from './interpreters/QueryInterpreter'
 import { SuperSonicBridge, type SuperSonicBridgeOptions } from './SuperSonicBridge'
@@ -128,7 +129,11 @@ export class SonicPiEngine {
   /** Pending volume to apply when bridge initializes */
   private pendingVolume: number | null = null
   /** Stored builder functions for capture/query path */
-  private loopBuilders = new Map<string, (b: ProgramBuilder) => void>()
+  // SP95(d) #393: builderFn may be async — an S3 (sync/cue) loop body awaits a
+  // scheduler-resolved sync payload mid-build (matching desktop's blocking sync).
+  // S1/S2 bodies stay synchronous; `await` on their void return is identity, and
+  // the QueryInterpreter path (capture, S1/S2 only) ignores the return value.
+  private loopBuilders = new Map<string, (b: ProgramBuilder) => void | Promise<void>>()
   /** Per-loop seed counters for deterministic random */
   private loopSeeds = new Map<string, number>()
   /** Per-loop tick counters — persisted across iterations so ring.tick() advances correctly */
@@ -176,8 +181,12 @@ export class SonicPiEngine {
    * scheduler-aware and time-stamped correctly.
    */
   readonly midiBridge = new MidiBridge()
-  /** Global key-value store — shared across all loops via get/set */
-  private globalStore = new Map<string | symbol, unknown>()
+  /** Global key-value store — shared across all loops via get/set.
+   *  SP95(d) #350 slice 2: virtual-time-indexed TimeState (was a plain Map).
+   *  Writes carry the writer's current_time(); reads resolve "last set ≤ reader
+   *  vt". A back-compat facade (.get(key)/.size/.clear) keeps Map-shaped tests
+   *  green. Cleared only on dispose (SK14). */
+  private globalStore = new TimeState()
   /** User-defined functions — `define`/`ndefine` register here. Seeded back into the
    *  next eval's scopeBase so removing a `define` line from the buffer does not
    *  break a still-running live_loop that calls it. (#215) */
@@ -642,9 +651,9 @@ export class SonicPiEngine {
       // Scope handle — set when executor is created, used to isolate loop scopes
       let scopeHandle: ScopeHandle | null = null
 
-      const wrappedLiveLoop = (name: string, builderFnOrOpts: ((b: ProgramBuilder) => void) | Record<string, unknown>, maybeFn?: (b: ProgramBuilder) => void) => {
+      const wrappedLiveLoop = (name: string, builderFnOrOpts: ((b: ProgramBuilder) => void | Promise<void>) | Record<string, unknown>, maybeFn?: (b: ProgramBuilder) => void | Promise<void>) => {
         // Support both: live_loop("name", fn) and live_loop("name", {sync: "x"}, fn)
-        let builderFn: (b: ProgramBuilder) => void
+        let builderFn: (b: ProgramBuilder) => void | Promise<void>
         let syncTarget: string | null = null
         if (typeof builderFnOrOpts === 'function') {
           builderFn = builderFnOrOpts
@@ -808,8 +817,22 @@ export class SonicPiEngine {
           // ANOTHER live_loop's body still see the correct (innermost) parent.
           const prevBuildBuilder = this.currentBuildBuilder
           this.currentBuildBuilder = builder
+          // SP95(d) #393: wire the scheduler so `b.sync()` awaits the cue
+          // payload mid-build (build-time resolution → post-sync get/e[:val]
+          // read fresh state). Only this audio build path wires it; the
+          // QueryInterpreter/capture build (S2-gated) never does, so an S3
+          // sync loop cannot register a phantom waiter through capture.
+          builder.setSyncContext(scheduler, name)
+          // SP95(d) #350 slice 2: wire the Time State so `b.set` writes eagerly
+          // at current_time() and `b.get` reads at the reader's current_time().
+          builder.setTimeStateContext(this.globalStore)
           try {
-            builderFn(builder)
+            // SP95(d) #393: await so an S3 body can suspend on a scheduler-resolved
+            // sync mid-build. For today's synchronous S1/S2 bodies this `await` is
+            // identity (await on a non-thenable void). The single-field
+            // currentBuildBuilder above stays safe until sync actually awaits — the
+            // re-entrancy hardening is tracked in #395.
+            await builderFn(builder)
           } finally {
             this.currentBuildBuilder = prevBuildBuilder
             this.buildNestingDepth--
@@ -944,7 +967,7 @@ export class SonicPiEngine {
       // Matches desktop Sonic Pi: top-level with_fx creates FX once, GC blocked by subthread.join.
       const originalWrappedLiveLoop = wrappedLiveLoop
       const fxAwareWrappedLiveLoop = (name: string, builderFnOrOpts: ((b: ProgramBuilder) => void) | Record<string, unknown>, maybeFn?: (b: ProgramBuilder) => void) => {
-        let builderFn: (b: ProgramBuilder) => void
+        let builderFn: (b: ProgramBuilder) => void | Promise<void>
         let opts: Record<string, unknown> | null = null
         if (typeof builderFnOrOpts === 'function') {
           builderFn = builderFnOrOpts
@@ -1039,10 +1062,29 @@ export class SonicPiEngine {
       // so `get["key"]` would return undefined. The Proxy routes property access
       // through the store while leaving `get(...)` calls and standard function
       // internals (name, length, call, apply, Symbol.toPrimitive, ...) alone.
+      // SP95(d) #350 slice 2: bare top-level `set` runs through the :__run_once
+      // builder (it gets setIterationContext, so current_time() resolves) —
+      // routing through b.set gives it the same eager write as loop bodies. If
+      // no builder is active (defensive fallback only), write at vt 0 against
+      // the Time State directly. (get is still the facade read here; Task 3
+      // routes get through b.get so it reads at the reader's vt.)
       const set = (key: string | symbol, value: unknown): void => {
-        this.globalStore.set(key, value)
+        const b = this.currentBuildBuilder
+        if (b) {
+          b.set(key, value)
+        } else {
+          this.globalStore.set(key, value, 0)
+        }
       }
-      const storeGet = (key: string | symbol): unknown => this.globalStore.get(key) ?? null
+      // SP95(d) #350 slice 2: bare top-level `get` (and any path that hits this
+      // sandbox closure rather than the in-loop __b.get) reads vt-aware through
+      // the active build builder (the :__run_once builder gets a current_time()).
+      // Falls back to the no-vt facade (latest value) if no builder is active.
+      const storeGet = (key: string | symbol): unknown => {
+        const b = this.currentBuildBuilder
+        if (b) return b.get(key)
+        return this.globalStore.get(key) ?? null
+      }
       const getFn = (key: string | symbol): unknown => storeGet(key)
       const get = new Proxy(getFn, {
         get(target, property, receiver) {

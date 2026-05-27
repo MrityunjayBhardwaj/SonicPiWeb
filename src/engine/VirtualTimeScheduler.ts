@@ -174,6 +174,12 @@ export class VirtualTimeScheduler {
   private syncWaiters = new Map<string, Array<{
     taskId: string
     resolve: (payload: SyncPayload) => void
+    /**
+     * Virtual time at which this waiter began syncing. A cue is delivered only
+     * if it fires STRICTLY AFTER this (desktop SK15 wake-phase semantic) — see
+     * fireCue.
+     */
+    waiterVt: number
   }>>()
   /** One-shot audio-time-bound callbacks (SV41 — backs scheduleAtVirtualTime). */
   private pendingCallbacks: PendingCallback[] = []
@@ -419,15 +425,29 @@ export class VirtualTimeScheduler {
     for (const [pattern, waiters] of this.syncWaiters) {
       if (waiters.length === 0) continue
       if (!cueGlobMatch(pattern, name)) continue
+      // Desktop wake-phase semantic (SK15): deliver a cue only to waiters that
+      // began syncing STRICTLY BEFORE the cue fired. A cue at the same virtual
+      // instant a waiter registered (e.g. a cuer's first `cue` at vt=0 vs a
+      // synced loop that registered its sync at vt=0) is NOT delivered — the
+      // synced loop misses it and catches the NEXT cue. This reproduces
+      // desktop's "a freshly-started synced loop waits a cycle" behavior
+      // (#351 note-0, #350 every-other-tick). The 1e-9 epsilon guards against
+      // float noise so genuinely-simultaneous events compare equal.
+      const kept: typeof waiters = []
       for (const waiter of waiters) {
-        const waiterTask = this.tasks.get(waiter.taskId)
-        if (waiterTask) {
-          // Inherit cue's virtual time (SV5)
-          waiterTask.virtualTime = cueVirtualTime
+        if (cueVirtualTime > waiter.waiterVt + 1e-9) {
+          const waiterTask = this.tasks.get(waiter.taskId)
+          if (waiterTask) {
+            // Inherit cue's virtual time (SV5)
+            waiterTask.virtualTime = cueVirtualTime
+          }
+          waiter.resolve({ args, bpm: cueBpm })
+        } else {
+          kept.push(waiter)
         }
-        waiter.resolve({ args, bpm: cueBpm })
       }
-      this.syncWaiters.delete(pattern)
+      if (kept.length > 0) this.syncWaiters.set(pattern, kept)
+      else this.syncWaiters.delete(pattern)
     }
   }
 
@@ -443,9 +463,14 @@ export class VirtualTimeScheduler {
     // get(:name) returns existing values; sync waits for the next one.
     // Without this, loops synced to met1 start at vt=0 instead of waiting
     // for met1's first beat (met1's auto-cue fires before synced loops run).
+    // Capture the virtual time at which this waiter starts syncing. fireCue
+    // only delivers cues that fire strictly after this instant, reproducing
+    // desktop's "a freshly-started synced loop misses a simultaneous cue and
+    // waits for the next one" wake-phase (SK15; #351 note-0 / #350).
+    const waiterVt = this.tasks.get(taskId)?.virtualTime ?? 0
     return new Promise<SyncPayload>((resolve) => {
       const waiters = this.syncWaiters.get(name) ?? []
-      waiters.push({ taskId, resolve })
+      waiters.push({ taskId, resolve, waiterVt })
       this.syncWaiters.set(name, waiters)
     })
   }

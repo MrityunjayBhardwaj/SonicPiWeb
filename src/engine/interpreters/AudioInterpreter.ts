@@ -7,6 +7,7 @@
  */
 
 import type { Program } from '../Program'
+import { TimeState } from '../TimeState'
 import { normalizePlayParams, normalizeControlParams, normalizeFxParams, resolveSynthName } from '../SoundLayer'
 import { noteToMidi } from '../NoteToFreq'
 
@@ -50,8 +51,16 @@ export interface AudioContext {
    * stacking from overlapping echo/delay/reverb nodes. See issue #70.
    */
   reusableFx: Map<string, ReusableFxState>
-  /** Global store for set/get — deferred set steps write here at runtime. */
-  globalStore?: Map<string | symbol, unknown>
+  /**
+   * Global store for set/get. SP95(d) #350 slice 2: now a virtual-time-indexed
+   * TimeState. The write is applied EAGERLY at build (ProgramBuilder.set), so
+   * the deferred `case 'set'` is a no-op on the TimeState path (Decision Q3 /
+   * option a) — re-applying at interpret vt would write a phantom shadow entry
+   * at a near-but-different vt and reintroduce the stale read #350 closes.
+   * Still typed to permit a plain Map for any non-engine caller; only the
+   * TimeState path is no-op'd.
+   */
+  globalStore?: TimeState | Map<string | symbol, unknown>
   /** Host-provided OSC send handler. If not set, osc_send is a silent no-op. */
   oscHandler?: (host: string, port: number, path: string, ...args: unknown[]) => void
   /** MIDI bridge for deferred midi-out steps (issue #195). */
@@ -253,8 +262,15 @@ export async function runProgram(
         break
 
       case 'set':
-        // Deferred set — fires at runtime, interleaved with sleeps
-        if (ctx.globalStore) {
+        // SP95(d) #350 slice 2: on the TimeState path the write was already
+        // applied EAGERLY at build (ProgramBuilder.set) timestamped by
+        // current_time(); re-applying here at the interpret vt would create a
+        // phantom shadow entry at a near-but-different vt (build vs interpret
+        // arithmetic differ) and reintroduce the stale read (Decision Q3,
+        // option a) — so the deferred apply is a no-op for TimeState. The step
+        // is retained only for SV20/SP41 contract + event-stream/capture. A
+        // plain Map (any non-engine caller) keeps the legacy blind-overwrite.
+        if (ctx.globalStore && !(ctx.globalStore instanceof TimeState)) {
           ctx.globalStore.set(step.key, step.value)
         }
         break
