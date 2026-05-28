@@ -101,6 +101,53 @@ describe('with_fx', () => {
     expect(bridge.calls).toContain('free:16')
   })
 
+  it('with_fx kill_delay waits for inner play release (mod_303_phade — vt-aware aliveUntil)', async () => {
+    // Regression test for the `with_fx { play release: N>1 }` truncation class
+    // (mod_303_phade, official roster). The FX kill was hardcoded at
+    // `vt + killDelay` (default 1.0s) AFTER the block exits — ignoring inner
+    // play's envelope. Desktop SP waits for `tracker.block_until_finished` THEN
+    // sleeps kill_delay (sound.rb:1817-1822). Fix: track `aliveUntil` per FX
+    // scope, extended by each inner play to `vt + attack + decay + sustain +
+    // release`. killAt = max(vt_at_block_exit, aliveUntil) + killDelay.
+    //
+    // Program: with_fx :reverb { play 60, attack:0 decay:0 sustain:0 release:5 }
+    // Expected: aliveUntil = 0 + 0+0+0+5 = 5. killAt = max(0,5) + 1 = 6.
+    // Pre-fix: killAt = 0 + 1 = 1. Assertions at cbHorizon=3 distinguish the two.
+    const scheduler = new VirtualTimeScheduler({
+      getAudioTime: () => 0,
+      schedAheadTime: 100,
+    })
+    const eventStream = new SoundEventStream()
+    const nodeRefMap = new Map<number, number>()
+    const bridge = createMockBridge()
+
+    const program = new ProgramBuilder(0)
+      .with_fx('reverb', (b) =>
+        b.play(60, { attack: 0, decay: 0, sustain: 0, release: 5 })
+      )
+      .build()
+
+    scheduler.registerLoop('test', async () => {
+      await runProgram(program, makeAudioCtx(scheduler, 'test', eventStream, nodeRefMap, bridge))
+    })
+
+    scheduler.tick(100); await flushMicrotasks()
+    scheduler.tick(100); await flushMicrotasks()
+    expect(bridge.calls).toContain('fx:reverb:in16:out0')
+
+    // cbHorizon=3 — past the BUGGY 1s kill horizon, before the CORRECT 6s one.
+    // Pre-fix this fires the kill (calls.contains 'free:16'); post-fix it does NOT.
+    scheduler.tick(103); await flushMicrotasks()
+    expect(bridge.calls.find(c => c.startsWith('freeNode:'))).toBeUndefined()
+    expect(bridge.calls.find(c => c.startsWith('freeGroup:'))).toBeUndefined()
+    expect(bridge.calls.find(c => c === 'free:16')).toBeUndefined()
+
+    // cbHorizon=100 — well past the 6s correct horizon. FX should be freed now.
+    scheduler.tick(200); await flushMicrotasks()
+    expect(bridge.calls).toContain('freeGroup:5000')
+    expect(bridge.calls).toContain('free:16')
+  })
+
   it('nested FX chains buses correctly', async () => {
     const scheduler = new VirtualTimeScheduler({
       getAudioTime: () => 0,
