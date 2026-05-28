@@ -1258,11 +1258,13 @@ export class ProgramBuilder {
     opts?: Record<string, unknown>
   ): this {
     const timeArr = Array.isArray(times) ? times : [times]
+    // Desktop sound.rb:1281-1287 sleeps after EVERY note, including the last
+    // (`notes.each_with_index { play(note); sleep(duration) }`). Omitting the
+    // final sleep advances (n-1)·dt instead of n·dt — a single-note pattern
+    // would advance zero beats, collapsing the timeline (#404).
     for (let i = 0; i < notes.length; i++) {
       this.play(notes[i], opts)
-      if (i < notes.length - 1) {
-        this.sleep(timeArr[i % timeArr.length])
-      }
+      this.sleep(timeArr[i % timeArr.length])
     }
     return this
   }

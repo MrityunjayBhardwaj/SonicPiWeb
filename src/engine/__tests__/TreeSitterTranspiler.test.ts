@@ -1413,11 +1413,11 @@ end`)
   sleep 1
 end`)
       expect(error).toBeUndefined()
-      // 3 notes with 2 sleeps between them
+      // 3 notes, a sleep after each (#404), plus the trailing `sleep 1`
       const playSteps = steps.filter((s: any) => s.tag === 'play')
       const sleepSteps = steps.filter((s: any) => s.tag === 'sleep')
       expect(playSteps.length).toBe(3)
-      expect(sleepSteps.length).toBeGreaterThanOrEqual(2)
+      expect(sleepSteps.length).toBeGreaterThanOrEqual(3)
     })
 
     // --- Issue #95: Runtime semantic gap tests ---
