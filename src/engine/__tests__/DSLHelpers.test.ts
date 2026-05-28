@@ -550,18 +550,27 @@ describe('Pattern helpers (#211 Tier A)', () => {
     expect(steps.filter(s => s.tag === 'sleep').length).toBe(0)
   })
 
-  it('play_pattern_timed cycles through times array', () => {
+  it('play_pattern_timed cycles through times array (sleeps after every note, #404)', () => {
     const b = new ProgramBuilder()
     b.play_pattern_timed([60, 64, 67, 72], [0.25, 0.5])
     const sleeps = b.build().filter(s => s.tag === 'sleep')
-    expect(sleeps.map(s => (s as { tag: 'sleep'; beats: number }).beats)).toEqual([0.25, 0.5, 0.25])
+    // Desktop sound.rb:1281-1287 sleeps after EVERY note (times.ring): n=4 → 4 sleeps
+    expect(sleeps.map(s => (s as { tag: 'sleep'; beats: number }).beats)).toEqual([0.25, 0.5, 0.25, 0.5])
   })
 
-  it('play_pattern_timed accepts scalar time', () => {
+  it('play_pattern_timed accepts scalar time (sleeps after every note, #404)', () => {
     const b = new ProgramBuilder()
     b.play_pattern_timed([60, 64, 67], 0.5)
     const sleeps = b.build().filter(s => s.tag === 'sleep')
-    expect(sleeps.map(s => (s as { tag: 'sleep'; beats: number }).beats)).toEqual([0.5, 0.5])
+    expect(sleeps.map(s => (s as { tag: 'sleep'; beats: number }).beats)).toEqual([0.5, 0.5, 0.5])
+  })
+
+  it('play_pattern_timed single note advances time by its duration (#404 regression)', () => {
+    const b = new ProgramBuilder()
+    b.play_pattern_timed([60], [1.0])
+    const sleeps = b.build().filter(s => s.tag === 'sleep')
+    // Single-note pattern ≡ `play 60; sleep 1.0` — must advance 1.0 beat, not 0
+    expect(sleeps.map(s => (s as { tag: 'sleep'; beats: number }).beats)).toEqual([1.0])
   })
 })
 
