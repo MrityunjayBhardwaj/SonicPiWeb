@@ -125,7 +125,7 @@ export class SonicPiEngine {
    *  dropping the map entries, otherwise the stale callback fires later and
    *  calls freeBus/freeGroup on what are by then NEW live FX resources —
    *  corrupting the bus pool and silently killing groups (issue #290, SP82). */
-  private reusableFx = new Map<string, { bus: number; groupId: number; nodeId: number; outBus: number; killTimer?: { cancel: () => void } }>()
+  private reusableFx = new Map<string, { bus: number; groupId: number; nodeId: number; outBus: number; killTimer?: { cancel: () => void }; aliveUntil: number }>()
   /** Pending volume to apply when bridge initializes */
   private pendingVolume: number | null = null
   /** Stored builder functions for capture/query path */

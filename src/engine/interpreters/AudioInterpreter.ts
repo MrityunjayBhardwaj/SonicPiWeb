@@ -34,6 +34,17 @@ interface ReusableFxState {
    * the setTimeout-based reuse logic).
    */
   killTimer?: { cancel: () => void }
+  /**
+   * Latest virtual time at which any synth dispatched inside this FX scope's
+   * inner block will still be audible (= max over plays/samples of
+   *   playStartVt + attack + decay + sustain + release).
+   * Used to delay FX bus teardown until inner audio has finished, mirroring
+   * desktop SP's `tracker.block_until_finished` THEN `Kernel.sleep(kill_delay)`
+   * sequence in sound.rb:1817-1822. Without this, `with_fx :reverb { play
+   * release: 60 }` truncated web audio at vt + 1 (the killDelay default) while
+   * desktop sustained ~61s — the mod_303_phade regression class.
+   */
+  aliveUntil: number
 }
 
 export interface AudioContext {
@@ -51,6 +62,14 @@ export interface AudioContext {
    * stacking from overlapping echo/delay/reverb nodes. See issue #70.
    */
   reusableFx: Map<string, ReusableFxState>
+  /**
+   * Stack of currently-active with_fx scopes (innermost last), keyed by
+   * `${taskId}:fx${fxIndex}` matching `reusableFx`. Lazily initialised in
+   * `case 'fx'`; absent in paths that never enter an FX. When a play/sample
+   * fires, every enclosing FX's `aliveUntil` is extended so the FX bus
+   * outlives the audible synth (mirrors desktop sound.rb:1817-1822).
+   */
+  currentFxStack?: string[]
   /**
    * Global store for set/get. SP95(d) #350 slice 2: now a virtual-time-indexed
    * TimeState. The write is applied EAGERLY at build (ProgramBuilder.set), so
@@ -162,6 +181,22 @@ export async function runProgram(
             .catch((err: Error) => {
               ctx.printHandler?.(`Synth '${synth}' failed: ${err.message}`)
             })
+
+          // Extend enclosing FX scopes' aliveUntil so the FX bus outlives this
+          // synth's audible envelope. Mirrors desktop sound.rb:1817-1822
+          // (`tracker.block_until_finished` THEN `Kernel.sleep(kill_delay)`).
+          // Uses post-normalization envelope values (BPM-scaled).
+          if (ctx.currentFxStack && ctx.currentFxStack.length > 0) {
+            const a = (params.attack as number | undefined) ?? 0
+            const d = (params.decay as number | undefined) ?? 0
+            const s = (params.sustain as number | undefined) ?? 0
+            const r = (params.release as number | undefined) ?? 1
+            const playEnd = task.virtualTime + a + d + s + r
+            for (const key of ctx.currentFxStack) {
+              const fx = ctx.reusableFx.get(key)
+              if (fx && playEnd > fx.aliveUntil) fx.aliveUntil = playEnd
+            }
+          }
         }
 
         // Emit sound event
@@ -193,6 +228,25 @@ export async function runProgram(
             .catch((err: Error) => {
               ctx.printHandler?.(`Sample '${step.name}' failed: ${err.message}`)
             })
+
+          // Extend enclosing FX scopes' aliveUntil — same rationale as `case 'play'`.
+          // Samples don't go through normalizePlayParams, so we read opts directly.
+          // Without per-sample duration info the estimate is best-effort: env opts
+          // if present, fallback release=1.0 (matches prior behaviour). A long-loop
+          // sample inside with_fx could still be truncated; a richer estimate is a
+          // follow-up.
+          if (ctx.currentFxStack && ctx.currentFxStack.length > 0) {
+            const o = step.opts as Record<string, number> | undefined
+            const a = (o?.attack as number | undefined) ?? 0
+            const d = (o?.decay as number | undefined) ?? 0
+            const s = (o?.sustain as number | undefined) ?? 0
+            const r = (o?.release as number | undefined) ?? 1
+            const playEnd = task.virtualTime + a + d + s + r
+            for (const key of ctx.currentFxStack) {
+              const fx = ctx.reusableFx.get(key)
+              if (fx && playEnd > fx.aliveUntil) fx.aliveUntil = playEnd
+            }
+          }
         }
 
         const audioCtxTime = ctx.bridge?.audioContext?.currentTime ?? 0
@@ -304,6 +358,10 @@ export async function runProgram(
         // Subsequent iterations: reuse the same node — inner synths write
         // to the same bus, FX processes a continuous stream.
         // This prevents additive signal stacking from overlapping echo nodes.
+        // Lazy-init the FX scope stack so non-FX paths pay nothing. Each entry
+        // is a key into `ctx.reusableFx` and lives only for this block's body.
+        const fxStack = (ctx.currentFxStack ??= [])
+
         const existing = ctx.reusableFx.get(fxKey)
         if (existing) {
           // Reuse — cancel pending kill timer, route through existing FX bus
@@ -315,9 +373,16 @@ export async function runProgram(
             ctx.nodeRefMap.set(step.nodeRef, existing.nodeId)
           }
           task.outBus = existing.bus
+          // Reset aliveUntil for THIS iteration's plays/samples; the prior
+          // iteration's value is no longer load-bearing (we just cancelled
+          // that kill timer above). aliveUntil is a floor — `case 'play'`
+          // bumps it up as inner synths dispatch.
+          existing.aliveUntil = task.virtualTime
+          fxStack.push(fxKey)
           try {
             for (let rep = 0; rep < reps; rep++) await runProgram(step.body, ctx, fxCounter)
           } finally {
+            fxStack.pop()
             task.outBus = prevOutBus
             ctx.bridge.flushMessages()
             // Schedule kill in VIRTUAL TIME (SV41) — cancelled if next iter
@@ -333,7 +398,12 @@ export async function runProgram(
             // CREATE branch and own the new state's killTimer.
             if (ctx.reusableFx.get(fxKey) === existing) {
               const killDelay = (step.opts.kill_delay as number) ?? 1.0
-              const killAt = task.virtualTime + killDelay
+              // Wait for inner audio to finish (aliveUntil) THEN add kill_delay —
+              // matches desktop sound.rb:1817-1822 (tracker.block_until_finished
+              // then Kernel.sleep(kill_delay)). Without this, a sustained synth
+              // inside this FX (e.g. `play release: 60`) was truncated to ~1s
+              // (mod_303_phade).
+              const killAt = Math.max(task.virtualTime, existing.aliveUntil) + killDelay
               existing.killTimer = ctx.scheduler.scheduleAtVirtualTime(killAt, () => {
                 // /n_free the FX synth itself — applyFxImmediate puts it in
                 // root group 101 (not the container group), so freeGroup
@@ -362,23 +432,32 @@ export async function runProgram(
             }
             task.outBus = newBus
             ctx.bridge.flushMessages()
-            // Store for reuse — with pending kill timer as safety net
+            // Store for reuse — with pending kill timer as safety net.
+            // aliveUntil starts at the current vt (no plays yet); `case 'play'`
+            // bumps it as inner synths dispatch.
             const state: ReusableFxState = {
               bus: newBus,
               groupId: fxGroupId,
               nodeId: fxNodeId!,
               outBus: prevOutBus,
+              aliveUntil: task.virtualTime,
             }
             ctx.reusableFx.set(fxKey, state)
-            for (let rep = 0; rep < reps; rep++) await runProgram(step.body, ctx, fxCounter)
+            fxStack.push(fxKey)
+            try {
+              for (let rep = 0; rep < reps; rep++) await runProgram(step.body, ctx, fxCounter)
+            } finally {
+              fxStack.pop()
+            }
           } finally {
             task.outBus = prevOutBus
             ctx.bridge.flushMessages()
-            // Schedule kill in VIRTUAL TIME (SV41) — if next iter reuses, cancelled
+            // Schedule kill in VIRTUAL TIME (SV41) — if next iter reuses, cancelled.
+            // killAt = max(vt_at_block_exit, aliveUntil) + killDelay — see reuse branch.
             const killDelay = (step.opts.kill_delay as number) ?? 1.0
             const state = ctx.reusableFx.get(fxKey)
             if (state) {
-              const killAt = task.virtualTime + killDelay
+              const killAt = Math.max(task.virtualTime, state.aliveUntil) + killDelay
               state.killTimer = ctx.scheduler.scheduleAtVirtualTime(killAt, () => {
                 ctx.bridge!.freeNode(state.nodeId)
                 ctx.bridge!.freeGroup(state.groupId)
