@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>SP107 — mono samples play centered (not left-only)</title>
+    <style>
+      :root {
+        --bg: #1a1b26;
+        --bg-elev: #1f2335;
+        --bg-row: #16161e;
+        --border: #2a2e46;
+        --text: #c0caf5;
+        --text-dim: #7a85b3;
+        --text-mute: #565f89;
+        --accent: #ff1493;
+        --accent-2: #7aa2f7;
+        --pass: #9ece6a;
+        --flag: #e0af68;
+        --fail: #f7768e;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "Liberation Mono", monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 13px;
+      }
+      .wrap { max-width: 1300px; margin: 0 auto; padding: 24px 32px 64px; }
+      h1 { font-size: 22px; margin: 0 0 4px; font-weight: 700; }
+      h1 small { color: var(--text-dim); font-weight: 400; font-size: 14px; margin-left: 12px; }
+      h2 {
+        font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+        color: var(--text-dim); margin: 32px 0 10px;
+        border-top: 1px solid var(--border); padding-top: 18px;
+      }
+      .lede { color: var(--text-dim); font-size: 14px; line-height: 1.6; margin: 8px 0 0; }
+      .lede b { color: var(--text); }
+      code { font-family: var(--mono); background: var(--bg-row); padding: 1px 5px; border-radius: 3px; font-size: 0.92em; }
+      .question-card {
+        background: var(--bg-elev); border: 1px solid var(--border);
+        border-left: 4px solid var(--accent-2); border-radius: 6px;
+        padding: 14px 18px; margin: 18px 0;
+      }
+      .question-card .q { font-weight: 600; color: var(--text); margin-bottom: 6px; }
+      .question-card .a { color: var(--text-dim); font-size: 13px; line-height: 1.6; }
+      .question-card .a b { color: var(--text); }
+      .verdict {
+        display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.06em; padding: 3px 8px; border-radius: 3px; margin-right: 8px; vertical-align: middle;
+      }
+      .verdict.fixed { background: rgba(158, 206, 106, 0.16); color: var(--pass); }
+      .tldr {
+        margin: 18px 0; padding: 16px 18px; background: var(--bg-elev);
+        border-left: 4px solid var(--pass); border-radius: 6px; line-height: 1.7; color: var(--text-dim);
+      }
+      .tldr b { color: var(--text); }
+      .tldr ol { margin: 8px 0 0; padding-left: 20px; }
+      .tldr li { margin: 6px 0; }
+
+      .png-block { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 10px 0; }
+      .png-block img { max-width: 100%; display: block; border-radius: 4px; margin: 0 auto; }
+      .png-cap { color: var(--text-mute); font-size: 12px; margin-top: 8px; text-align: center; }
+
+      .audio-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin: 6px 0 4px; }
+      .card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+      .card.before { border-top: 3px solid var(--fail); }
+      .card.after  { border-top: 3px solid var(--pass); }
+      .card.ref    { border-top: 3px solid var(--accent-2); }
+      .card h3 {
+        margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+        color: var(--text-dim); display: flex; justify-content: space-between; align-items: baseline;
+      }
+      .card h3 span { font-family: var(--mono); text-transform: none; letter-spacing: 0; color: var(--text-mute); font-size: 11px; font-weight: 400; }
+      .card audio { width: 100%; height: 34px; }
+      .card .lr { font-family: var(--mono); font-size: 11.5px; margin-top: 8px; color: var(--text-dim); }
+      .card .lr b { color: var(--text); }
+      .card .lr .silent { color: var(--fail); font-weight: 700; }
+      .card .lr .ok { color: var(--pass); }
+
+      table.metrics { border-collapse: collapse; width: 100%; font-size: 12.5px; font-family: var(--mono); margin: 4px 0; }
+      table.metrics th, table.metrics td { padding: 6px 12px; border-bottom: 1px solid var(--border); text-align: left; }
+      table.metrics th { background: var(--bg-elev); color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+      table.metrics td.num { text-align: right; font-variant-numeric: tabular-nums; }
+      .ratio-good { color: var(--pass); }
+      .ratio-mid { color: var(--flag); }
+      .ratio-bad { color: var(--fail); }
+
+      pre.code {
+        background: var(--bg-row); border: 1px solid var(--border); border-radius: 6px;
+        padding: 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 12px;
+        line-height: 1.55; color: var(--text); margin: 8px 0;
+      }
+      pre.code .cmt { color: var(--text-mute); font-style: italic; }
+      pre.code .key { color: var(--accent-2); }
+      pre.code .str { color: var(--pass); }
+      pre.code .num { color: var(--flag); }
+      .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .col-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin: 0 0 4px; }
+
+      .probes { margin: 0; padding: 6px 0; list-style: none; }
+      .probes li { padding: 9px 13px; margin: 5px 0; background: var(--bg-row); border-left: 3px solid var(--border); border-radius: 4px; line-height: 1.55; }
+      .probes li.fail { border-left-color: var(--fail); }
+      .probes li.pass { border-left-color: var(--pass); }
+      .probes li.key  { border-left-color: var(--accent); }
+      .probes li b { color: var(--text); font-weight: 600; }
+      .probes li code { font-size: 11.5px; }
+
+      .sync-bar { display: flex; gap: 8px; margin: 12px 0 6px; align-items: center; }
+      .sync-btn { background: var(--accent); color: #fff; border: 0; padding: 8px 14px; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; }
+      .sync-btn.sec { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+      .sync-btn:hover { filter: brightness(1.1); }
+      .sync-hint { color: var(--text-mute); font-size: 12px; }
+
+      .footer-note { font-size: 12px; color: var(--text-mute); line-height: 1.6; margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--border); }
+      .footer-note b { color: var(--text-dim); }
+      .footer-note ul { padding-left: 20px; }
+      .footer-note a, .nav a, .lede a { color: var(--accent-2); text-decoration: none; }
+      .footer-note a:hover, .nav a:hover, .lede a:hover { text-decoration: underline; }
+      .nav { color: var(--text-dim); font-size: 12px; margin-bottom: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="nav"><a href="index.html">← FX A/B Inspector</a> &nbsp;·&nbsp; <a href="launch-gate.html">🚦 Launch Gate</a></div>
+      <h1>SP107 — mono samples play <em>centered</em>, not left-channel-only
+        <small>diagnosis → fix → verification · PR #415</small></h1>
+      <div class="lede">
+        A real-example parity investigation. <code>monday_blues</code> read with a large spectral diff
+        (L2 mel-dB <b>31.2</b>, MFCC <b>260</b>) on kick-dominated material. The pre-written hypothesis
+        was a "sub-bass-deficient kick" — a gain-vs-rendering fork. <b>Both candidates were refuted.</b>
+        The real cause was a one-axis-missing player-selection bug: <b>mono samples rendered to the
+        left channel only</b>, the right channel silent. Read top-to-bottom for the chronology.
+      </div>
+
+      <div class="question-card">
+        <div class="q">Question — why does kick-dominated material (<code>:drum_heavy_kick</code>) read a large spectral diff vs desktop, with no wrong notes?</div>
+        <div class="a">
+          <span class="verdict fixed">Resolved</span>
+          Because <code>selectSamplePlayer</code> chose the sample player by opt-complexity <em>alone</em> and
+          never by the sample's <b>channel count</b>. A 1-channel (mono) buffer routed through
+          <code>basic_stereo_player</code> (which expects a 2-channel buffer) left the right output channel
+          <b>silent</b>. When the comparator mono-averages <code>(L+R)/2</code>, a left-only kick is halved
+          relative to centered synth layers — collapsing the sub-band share and inflating MFCC. Fixed by adding
+          the channel-count axis, mirroring Desktop SP's <code>resolve_specific_sampler</code>.
+        </div>
+      </div>
+
+      <div class="tldr">
+        <b>TL;DR</b>
+        <ol>
+          <li><b>The bug:</b> mono samples were left-channel-only on web. Kick A/B: web <code>L=0.109 / R=0.000</code> vs desktop centered <code>L=R=0.2265</code>.</li>
+          <li><b>The measurement trap:</b> the prior session's "0.24× attenuated kick" was an artifact of mono-averaging a left-only signal. Reading L and R <em>separately</em> revealed <code>R=0</code> — a channel bug masquerading as a gain bug.</li>
+          <li><b>Root cause:</b> <code>selectSamplePlayer(opts)</code> branched only on opt-complexity; it never read the sample's channel count. Desktop's <code>resolve_specific_sampler(num_chans, args_h)</code> (sound.rb:3470-3478) picks <code>basic_mono_player</code> for 1-channel samples (which Pan2-centers).</li>
+          <li><b>The fix (PR #415):</b> add the channel-count axis — cache <code>audioBuffer.numberOfChannels</code> from the existing decode, resolve it before player selection, use mono players for mono samples. Pure synthdef-name swap; zero param-translation change; defaults to stereo (no regression).</li>
+          <li><b>Verified Level-3:</b> web kick R-channel <b class="ratio-good">0.000 → 0.1090</b> (centered); <code>monday_blues</code> <b class="ratio-good">L2 31.2→9.3, MFCC 260→106</b>; launch gate stays <b>5/7 = 71.4% PASS</b>.</li>
+        </ol>
+      </div>
+
+      <!-- ================= HERO ================= -->
+      <h2 id="hero">The bug, in one picture — per-channel waveform</h2>
+      <div class="lede" style="margin-bottom: 10px">
+        <code>live_loop :k do; sample :drum_heavy_kick, rate: 0.8; sleep 0.5; end</code> — same code, three captures.
+        The right channel is <b>flat at zero</b> before the fix; populated and equal to the left after.
+      </div>
+      <div class="png-block">
+        <img src="sp107/kick-channels.png" alt="per-channel waveform: before fix R silent, after fix R=L, desktop R=L" />
+        <div class="png-cap">Top (red): web before fix — R channel silent. Middle (green): web after fix — R = L = 0.109. Bottom (blue): desktop reference — R = L = 0.2265 (centered). The 0.48× per-channel level is the separate global WASM/native gain gap (#268), not this bug.</div>
+      </div>
+
+      <!-- ================= AUDIO ================= -->
+      <h2 id="audio">Listen — <code>:drum_heavy_kick</code> isolated</h2>
+      <div class="sync-bar">
+        <button class="sync-btn" data-group="kick" data-act="play">▶ Play all three</button>
+        <button class="sync-btn sec" data-group="kick" data-act="stop">■ Stop</button>
+        <span class="sync-hint">Use headphones / a stereo setup — the "before" plays only in your left ear.</span>
+      </div>
+      <div class="audio-grid">
+        <div class="card before">
+          <h3>Web — before <span>basic_stereo_player</span></h3>
+          <audio data-group="kick" controls preload="metadata" src="sp107/kick-web-before.wav"></audio>
+          <div class="lr">L <b>0.109</b> &nbsp; R <span class="silent">0.000 ✖ silent</span></div>
+        </div>
+        <div class="card after">
+          <h3>Web — after <span>basic_mono_player</span></h3>
+          <audio data-group="kick" controls preload="metadata" src="sp107/kick-web-after.wav"></audio>
+          <div class="lr">L <b>0.109</b> &nbsp; R <span class="ok">0.109 ✓ centered</span></div>
+        </div>
+        <div class="card ref">
+          <h3>Desktop Sonic Pi <span>reference</span></h3>
+          <audio data-group="kick" controls preload="metadata" src="sp107/kick-desktop.wav"></audio>
+          <div class="lr">L <b>0.2265</b> &nbsp; R <span class="ok">0.2265 ✓ centered</span></div>
+        </div>
+      </div>
+
+      <!-- ================= MEASUREMENT TRAP ================= -->
+      <h2 id="trap">The measurement trap — why the first read was wrong</h2>
+      <div class="lede">
+        The prior session isolated the kick and reported it "0.24× attenuated / sub-bass-deficient," pointing at
+        gain or sample-player filtering. That number was an <b>artifact of the analysis</b>, not the engine:
+      </div>
+      <ul class="probes">
+        <li class="fail"><b>Symptom mismatch:</b> the comparison tool reported web kick peak <code>0.109</code>, but a per-hit script (which mono-averaged <code>(L+R)/2</code>) reported <code>0.0545</code> — a clean <b>2× disagreement on the same file</b>.</li>
+        <li class="key"><b>The witness check:</b> two measurements of the same WAV cannot disagree by 2× unless one is wrong. Reading L and R <em>separately</em> showed <code>L=0.109, R=0.0000</code> — the mono-average had halved a single-populated channel.</li>
+        <li class="pass"><b>Control 1:</b> the <code>mod_saw</code> synth alone is <code>L=R=0.1514</code> (centered) → the defect is <b>sample-specific</b>, not global.</li>
+        <li class="pass"><b>Control 2:</b> the kick at <code>rate: 1.0</code> is also left-only → not a <code>rate:</code> artifact.</li>
+        <li class="pass"><b>Per-channel truth:</b> the kick's per-channel gain (0.48×) and spectral shape (99% sub &lt;80&nbsp;Hz) match desktop exactly. The <em>only</em> defect is the missing right channel.</li>
+      </ul>
+      <div class="lede" style="margin-top:10px">
+        <b>The lesson (now vyapti SV54):</b> on stereo WAVs, read L and R separately <em>before</em> any mono-collapse — a channel-routing bug otherwise hides as a "gain" bug.
+      </div>
+
+      <!-- ================= ROOT CAUSE + GROUNDING ================= -->
+      <h2 id="root">Root cause — one axis missing vs the reference</h2>
+      <div class="lede">
+        Desktop Sonic Pi selects the sample player on <b>two</b> independent axes; our engine had only one.
+      </div>
+      <div class="two-col">
+        <div>
+          <p class="col-label">Desktop SP — sound.rb:3470-3478</p>
+          <pre class="code"><span class="key">def</span> resolve_specific_sampler(num_chans, args_h)
+  <span class="key">if</span> complex_sampler_args?(args_h)
+    (num_chans == <span class="num">1</span>) ? :mono_player : :stereo_player
+  <span class="key">else</span>
+    (num_chans == <span class="num">1</span>) ? :basic_mono_player : :basic_stereo_player
+  <span class="key">end</span>
+<span class="key">end</span>
+<span class="cmt"># num_chans read from the loaded buffer (buf_info.num_chans, :3498)</span>
+<span class="cmt"># BEFORE the player is resolved → mono samples get a mono player</span></pre>
+        </div>
+        <div>
+          <p class="col-label">Ours — before the fix (SoundLayer.ts)</p>
+          <pre class="code"><span class="key">function</span> selectSamplePlayer(opts) {
+  <span class="cmt">// opt-complexity axis ONLY — channel count never read</span>
+  <span class="key">if</span> (anyComplexOpt(opts)) <span class="key">return</span> <span class="str">'…stereo_player'</span>
+  <span class="key">return</span> <span class="str">'…basic_stereo_player'</span>  <span class="cmt">// ← mono buffer → R silent</span>
+}</pre>
+        </div>
+      </div>
+      <div class="lede" style="margin-top:6px">
+        A mono buffer played through <code>basic_stereo_player</code> (which reads a 2-channel buffer) writes audio to
+        the left bus channel and leaves the right empty. The mono players (<code>basic_mono_player</code>/<code>mono_player</code>)
+        <code>Pan2</code>-center a 1-channel <code>PlayBuf</code> to both channels. The basic mono and basic stereo players share
+        <b>identical arg signatures</b> (<code>synthinfo.rb:5013</code>, <code>BasicStereoPlayer&nbsp;&lt;&nbsp;BasicMonoPlayer</code>) — so the fix is a pure synthdef-name swap.
+      </div>
+
+      <!-- ================= THE FIX ================= -->
+      <h2 id="fix">The fix — add the channel-count axis (PR #415)</h2>
+      <ul class="probes">
+        <li class="pass"><b>Selection:</b> <code>selectSamplePlayer(opts, numChans = 2)</code> → <code>basic_mono_player</code>/<code>mono_player</code> when <code>numChans === 1</code>; stereo variants otherwise. <code>numChans</code> defaults to 2, so callers that omit it keep today's behavior (<b>no regression</b>).</li>
+        <li class="pass"><b>Ordering:</b> <code>SuperSonicBridge</code> caches <code>audioBuffer.numberOfChannels</code> from the <em>existing</em> <code>decodeAudioData</code> (new <code>sampleChannels</code> map) and resolves it <em>before</em> player selection — matching desktop's buf_info.num_chans-known-before-resolve ordering (sound.rb:3496-3498).</li>
+        <li class="pass"><b>Synthdefs:</b> mono players lazy-load via the existing <code>ensureSynthDefLoaded</code> (both confirmed in CDN @0.57.0).</li>
+        <li class="pass"><b>Failure mode:</b> on decode failure, falls back to stereo — degrades to pre-fix behavior, never to no-audio.</li>
+        <li class="key"><b>Self-review:</b> a follow-up commit clears <code>sampleChannels</code> in all three sample-teardown sites (SV38 hygiene), matching the sibling cache maps.</li>
+      </ul>
+
+      <!-- ================= VERIFICATION ================= -->
+      <h2 id="verify">Level-3 verification — observation, not inference</h2>
+      <p class="col-label">Kick isolated — per-channel + spectral shape</p>
+      <table class="metrics">
+        <thead><tr><th>Metric</th><th class="num">Desktop</th><th class="num">Web — before</th><th class="num">Web — after</th></tr></thead>
+        <tbody>
+          <tr><td>Left peak</td><td class="num">0.2265</td><td class="num">0.109</td><td class="num">0.109</td></tr>
+          <tr><td>Right peak</td><td class="num">0.2265</td><td class="num ratio-bad">0.0000 ✖</td><td class="num ratio-good">0.1090 ✓</td></tr>
+          <tr><td>Sub &lt;80 Hz share</td><td class="num">82.5%</td><td class="num">—</td><td class="num ratio-good">83.7%</td></tr>
+          <tr><td>MFCC dist (vs desktop)</td><td class="num">—</td><td class="num ratio-mid">200.4</td><td class="num ratio-good">161.3</td></tr>
+        </tbody>
+      </table>
+      <p class="col-label" style="margin-top:18px">monday_blues — the original symptom</p>
+      <table class="metrics">
+        <thead><tr><th>Metric</th><th class="num">Before fix</th><th class="num">After fix</th></tr></thead>
+        <tbody>
+          <tr><td>L2 (mel-dB) vs desktop</td><td class="num ratio-bad">31.17</td><td class="num ratio-good">9.34</td></tr>
+          <tr><td>MFCC dist vs desktop</td><td class="num ratio-bad">259.75</td><td class="num ratio-good">106.21</td></tr>
+          <tr><td>Sub-share gap (desktop↔web, same run)</td><td class="num ratio-bad">54 pt</td><td class="num ratio-good">4.6 pt</td></tr>
+          <tr><td>Web sub &lt;80 Hz share</td><td class="num ratio-bad">30.2%</td><td class="num ratio-good">46.3%</td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="mb-audio">monday_blues — after the fix (A/B)</h2>
+      <div class="sync-bar">
+        <button class="sync-btn" data-group="mb" data-act="play">▶ Play both</button>
+        <button class="sync-btn sec" data-group="mb" data-act="stop">■ Stop</button>
+        <span class="sync-hint">kick (<code>:drums</code>) + <code>mod_saw</code> synth (delay 6) + snare (delay 12.5)</span>
+      </div>
+      <div class="audio-grid" style="grid-template-columns: 1fr 1fr">
+        <div class="card ref">
+          <h3>Desktop Sonic Pi <span>reference</span></h3>
+          <audio data-group="mb" controls preload="metadata" src="sp107/monday-blues-desktop.wav"></audio>
+        </div>
+        <div class="card after">
+          <h3>Web — after fix <span>centered kick</span></h3>
+          <audio data-group="mb" controls preload="metadata" src="sp107/monday-blues-web-after.wav"></audio>
+        </div>
+      </div>
+      <div class="png-block" style="margin-top:12px">
+        <img src="sp107/monday-blues-spectrogram.png" alt="monday_blues spectrogram desktop vs web after fix" />
+        <div class="png-cap">monday_blues spectrogram — desktop vs web (after fix). L2 9.34 / MFCC 106.21.</div>
+      </div>
+
+      <div class="footer-note">
+        <b>Provenance</b>
+        <ul>
+          <li><b>Issue:</b> #414 &nbsp;·&nbsp; <b>PR:</b> #415 (merged) &nbsp;·&nbsp; commits <code>be92aab</code> (fix) + <code>8237794</code> (teardown hygiene)</li>
+          <li><b>Source (ours):</b> <code>src/engine/SoundLayer.ts</code> <code>selectSamplePlayer(opts, numChans)</code>; <code>src/engine/SuperSonicBridge.ts</code> <code>sampleChannels</code> / <code>decodeSampleMetadata</code> / <code>ensureSampleChannels</code> / <code>playSampleSlow</code></li>
+          <li><b>Source (reference):</b> Desktop SP <code>sound.rb:3470-3478</code> (resolve_specific_sampler), <code>:3496-3498</code> (load-before-resolve); <code>synthinfo.rb:5013/5031</code> (player arg-signature inheritance)</li>
+          <li><b>Catalogues:</b> hetvabhasa <b>SP107</b> (OPEN → ISOLATED → IMPLEMENTED); vyapti <b>SV54</b> (sample player selection must account for channel count)</li>
+          <li><b>Recordings on this page</b> are gitignored (<code>test_results/sp107/</code>, ≈10&nbsp;MB) — regenerate with <code>npx tsx tools/compare-desktop-vs-web.ts --file /tmp/kick.rb</code> (Chromium + SP.app @ 48&nbsp;kHz). If audio shows "could not load," serve the dir: <code>python3 -m http.server -d test_results 8080</code>.</li>
+          <li>The remaining per-channel <b>0.48×</b> level is the separate, deliberate global WASM/native gain gap (#268), out of scope for this fix.</li>
+        </ul>
+      </div>
+    </div>
+
+    <script>
+      // Group play/stop for the A/B audio cards.
+      document.querySelectorAll(".sync-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const group = btn.dataset.group;
+          const act = btn.dataset.act;
+          const players = document.querySelectorAll(`audio[data-group="${group}"]`);
+          players.forEach((a) => {
+            if (act === "play") {
+              a.currentTime = 0;
+              a.play().catch(() => {});
+            } else {
+              a.pause();
+              a.currentTime = 0;
+            }
+          });
+        });
+      });
+    </script>
+  </body>
+</html>
