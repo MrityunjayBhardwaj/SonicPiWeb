@@ -109,7 +109,9 @@ const COMMON_SYNTHDEFS = [
   'sonic-pi-pretty_bell',
   'sonic-pi-piano',
   'sonic-pi-basic_stereo_player',
-  // Note: sonic-pi-stereo_player is NOT in the CDN (404). Loaded lazily on demand.
+  // The other sample players load lazily on first use (cached in loadedSynthDefs):
+  // sonic-pi-stereo_player (complex stereo), and — for mono samples (SP107/#414) —
+  // sonic-pi-basic_mono_player / sonic-pi-mono_player.
 ]
 
 
@@ -129,6 +131,15 @@ export class SuperSonicBridge {
   private pendingSampleLoads = new Map<string, Promise<number>>()
   /** Sample duration cache — populated asynchronously on first load via Web Audio decode. */
   private sampleDurations = new Map<string, number>()
+  /**
+   * Sample channel-count cache — populated by the same Web Audio decode that
+   * fills sampleDurations. Drives mono-vs-stereo player selection (SP107/#414):
+   * a 1-channel sample MUST use a mono player or it plays left-channel-only.
+   * Mirrors Desktop SP's buf_info.num_chans (sound.rb:3498).
+   */
+  private sampleChannels = new Map<string, number>()
+  /** In-flight channel-count decodes — dedup so concurrent plays don't double-fetch. */
+  private pendingSampleChannels = new Map<string, Promise<number>>()
   // Pinned to @0.57.0 to match the runtime SuperSonic version (SV22:
   // CDN packages must pin together). The init() override at line 213
   // sets this from options or to the same pinned URL — this default
@@ -644,15 +655,58 @@ export class SuperSonicBridge {
    * Decode the sample via Web Audio to get its exact duration in seconds.
    * Fires once per sample name and caches the result.
    * Used by beat_stretch / pitch_stretch to apply Sonic Pi's exact formula.
+   *
+   * Side effect: also caches the channel count (sampleChannels), which drives
+   * mono-vs-stereo player selection. The single decode populates both maps.
    */
   private async fetchSampleDuration(name: string): Promise<void> {
     if (this.sampleDurations.has(name)) return
-    if (!this.sonic) return
+    await this.decodeSampleMetadata(name)
+  }
+
+  /**
+   * Fetch + decode a sample once, caching BOTH its duration and channel count.
+   * Deduped via pendingSampleChannels so concurrent first-plays don't double-fetch.
+   * Returns the channel count (the value the player-selection path needs).
+   */
+  private decodeSampleMetadata(name: string): Promise<number> {
+    const cached = this.sampleChannels.get(name)
+    if (cached !== undefined) return Promise.resolve(cached)
+    const inflight = this.pendingSampleChannels.get(name)
+    if (inflight) return inflight
+    if (!this.sonic) return Promise.resolve(2)
+
     const url = `${this.resolvedSampleBaseURL}${name}.flac`
-    const response = await fetch(url)
-    const arrayBuffer = await response.arrayBuffer()
-    const audioBuffer = await this.sonic.audioContext.decodeAudioData(arrayBuffer)
-    this.sampleDurations.set(name, audioBuffer.duration)
+    const p = fetch(url)
+      .then((response) => response.arrayBuffer())
+      .then((arrayBuffer) => this.sonic!.audioContext.decodeAudioData(arrayBuffer))
+      .then((audioBuffer) => {
+        this.sampleDurations.set(name, audioBuffer.duration)
+        this.sampleChannels.set(name, audioBuffer.numberOfChannels)
+        return audioBuffer.numberOfChannels
+      })
+      .finally(() => {
+        // SV43: clear the in-flight dedup entry on resolve OR reject so a
+        // later play can re-attempt rather than replay a dead rejection.
+        this.pendingSampleChannels.delete(name)
+      })
+    this.pendingSampleChannels.set(name, p)
+    return p
+  }
+
+  /**
+   * Resolve the sample's channel count for player selection, mirroring
+   * Desktop SP's buf_info.num_chans (sound.rb:3498) which is known
+   * synchronously before resolve_specific_sampler runs.
+   *
+   * Defaults to 2 (stereo) if the decode fails — same as today's behavior,
+   * so a CORS/404/decode error never breaks playback (it just keeps the
+   * pre-#414 stereo-player path). REF: SP107/#414.
+   */
+  private ensureSampleChannels(name: string): Promise<number> {
+    const cached = this.sampleChannels.get(name)
+    if (cached !== undefined) return Promise.resolve(cached)
+    return this.decodeSampleMetadata(name).catch(() => 2)
   }
 
   /**
@@ -744,16 +798,22 @@ export class SuperSonicBridge {
   ): Promise<number> {
     if (!this.sonic) throw new Error('SuperSonic not initialized')
 
-    const playerName = selectSamplePlayer(opts)
     const bufNum = this.loadedSamples.get(sampleName)
+    const numChans = this.sampleChannels.get(sampleName)
 
-    // Fast path: sample loaded + synthdef loaded — skip async entirely
-    if (bufNum !== undefined && this.loadedSynthDefs.has(playerName)) {
-      return Promise.resolve(this.playSampleImmediate(sampleName, bufNum, playerName, audioTime, opts, bpm))
+    // Fast path: sample loaded + channel count known + player synthdef loaded.
+    // Player selection needs the channel count (mono vs stereo, SP107/#414),
+    // so both bufNum AND numChans must be cached to skip async.
+    if (bufNum !== undefined && numChans !== undefined) {
+      const playerName = selectSamplePlayer(opts, numChans)
+      if (this.loadedSynthDefs.has(playerName)) {
+        return Promise.resolve(this.playSampleImmediate(sampleName, bufNum, playerName, audioTime, opts, bpm))
+      }
     }
 
-    // Slow path: load sample/synthdef first (only happens once per sample name)
-    return this.playSampleSlow(sampleName, playerName, audioTime, opts, bpm)
+    // Slow path: load sample + decode channel count + load synthdef first
+    // (only happens once per sample name / player synthdef).
+    return this.playSampleSlow(sampleName, audioTime, opts, bpm)
   }
 
   private playSampleImmediate(
@@ -828,13 +888,23 @@ export class SuperSonicBridge {
 
   private async playSampleSlow(
     sampleName: string,
-    playerName: string,
     audioTime: number,
     opts?: Record<string, number>,
     bpm?: number,
   ): Promise<number> {
-    const bufNum = await this.ensureSampleLoaded(sampleName)
-    if (playerName !== 'sonic-pi-basic_stereo_player') {
+    // Load the buffer and decode its channel count before selecting the
+    // player — mirrors Desktop SP, which knows buf_info.num_chans before
+    // resolve_specific_sampler runs (sound.rb:3496-3498). Without the channel
+    // count, a mono sample would route through basic_stereo_player and play
+    // left-channel-only (SP107/#414).
+    const [bufNum, numChans] = await Promise.all([
+      this.ensureSampleLoaded(sampleName),
+      this.ensureSampleChannels(sampleName),
+    ])
+    const playerName = selectSamplePlayer(opts, numChans)
+    // basic_stereo_player is pre-loaded at bootstrap; mono players and the
+    // complex stereo_player load lazily on first use (cached in loadedSynthDefs).
+    if (!this.loadedSynthDefs.has(playerName)) {
       await this.ensureSynthDefLoaded(playerName)
     }
     return this.playSampleImmediate(sampleName, bufNum, playerName, audioTime, opts, bpm)
@@ -1192,6 +1262,7 @@ export class SuperSonicBridge {
   freeSample(name: string): boolean {
     const had = this.loadedSamples.delete(name)
     this.sampleDurations.delete(name)
+    this.sampleChannels.delete(name)
     return had
   }
 
@@ -1200,6 +1271,7 @@ export class SuperSonicBridge {
     const count = this.loadedSamples.size
     this.loadedSamples.clear()
     this.sampleDurations.clear()
+    this.sampleChannels.clear()
     return count
   }
 
@@ -1287,5 +1359,8 @@ export class SuperSonicBridge {
     }
     this.loadedSynthDefs.clear()
     this.loadedSamples.clear()
+    this.sampleDurations.clear()
+    this.sampleChannels.clear()
+    this.pendingSampleChannels.clear()
   }
 }
