@@ -661,15 +661,37 @@ const SIMPLE_SAMPLER_ARGS = new Set([
 
 /**
  * Select the appropriate sample player synthdef.
- * Matches Desktop SP's complex_sampler_args? logic (sound.rb:3462):
- * basic_stereo_player if ALL keys are simple, stereo_player if ANY key is complex.
+ *
+ * Mirrors Desktop SP's `resolve_specific_sampler(num_chans, args_h)`
+ * (sound.rb:3470-3478) — TWO independent axes:
+ *   - opt complexity (complex_sampler_args?, sound.rb:3462): basic vs envelope player
+ *   - sample channel count: mono (1-ch) vs stereo (2-ch) player
+ *
+ *       num_chans == 1                 num_chans == 2 (default)
+ *   ┌─────────────────────────────┬──────────────────────────────┐
+ *   simple │ basic_mono_player     │ basic_stereo_player          │
+ *   complex│ mono_player           │ stereo_player                │
+ *   └─────────────────────────────┴──────────────────────────────┘
+ *
+ * A mono sample MUST use a mono player: the mono players Pan2-center the
+ * 1-channel buffer to both output channels, whereas basic_stereo_player
+ * reads a 2-channel buffer and leaves the right channel silent for a mono
+ * buffer (SP107 / #414 — mono samples played left-channel-only on web).
+ *
+ * numChans defaults to 2 (stereo) so a caller that doesn't yet know the
+ * channel count falls back to today's behavior (no regression).
+ * REF: sound.rb:3470-3478 resolve_specific_sampler, :3462 complex_sampler_args?,
+ * :3498 buf_info.num_chans. synthinfo.rb:5013/5031 — mono/stereo players share
+ * identical arg signatures (inheritance), so this is a pure synthdef-name swap.
  */
-export function selectSamplePlayer(opts?: Record<string, number>): string {
-  if (!opts) return 'sonic-pi-basic_stereo_player'
-  for (const key of Object.keys(opts)) {
-    if (!SIMPLE_SAMPLER_ARGS.has(key)) {
-      return 'sonic-pi-stereo_player'
-    }
+export function selectSamplePlayer(
+  opts?: Record<string, number>,
+  numChans: number = 2,
+): string {
+  const complex = opts !== undefined &&
+    Object.keys(opts).some((key) => !SIMPLE_SAMPLER_ARGS.has(key))
+  if (complex) {
+    return numChans === 1 ? 'sonic-pi-mono_player' : 'sonic-pi-stereo_player'
   }
-  return 'sonic-pi-basic_stereo_player'
+  return numChans === 1 ? 'sonic-pi-basic_mono_player' : 'sonic-pi-basic_stereo_player'
 }

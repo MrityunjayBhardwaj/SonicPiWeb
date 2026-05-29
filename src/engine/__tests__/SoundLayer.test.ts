@@ -516,6 +516,37 @@ describe('selectSamplePlayer', () => {
   it('returns stereo_player for norm', () => {
     expect(selectSamplePlayer({ norm: 1 })).toBe('sonic-pi-stereo_player')
   })
+
+  // Channel-count axis (SP107 / #414) — mirrors Desktop SP resolve_specific_sampler
+  // (sound.rb:3470-3478). A mono (1-ch) sample MUST use a mono player or it plays
+  // left-channel-only. numChans defaults to 2 (no regression for callers that omit it).
+  describe('channel-count axis (mono vs stereo player)', () => {
+    it('mono + simple opts → basic_mono_player', () => {
+      expect(selectSamplePlayer({ rate: 0.8 }, 1)).toBe('sonic-pi-basic_mono_player')
+    })
+
+    it('mono + no opts → basic_mono_player', () => {
+      expect(selectSamplePlayer(undefined, 1)).toBe('sonic-pi-basic_mono_player')
+    })
+
+    it('mono + complex opts → mono_player', () => {
+      expect(selectSamplePlayer({ pitch: 2 }, 1)).toBe('sonic-pi-mono_player')
+      expect(selectSamplePlayer({ start: 0.2, finish: 0.8 }, 1)).toBe('sonic-pi-mono_player')
+    })
+
+    it('stereo + simple opts → basic_stereo_player', () => {
+      expect(selectSamplePlayer({ rate: 0.8 }, 2)).toBe('sonic-pi-basic_stereo_player')
+    })
+
+    it('stereo + complex opts → stereo_player', () => {
+      expect(selectSamplePlayer({ pitch: 2 }, 2)).toBe('sonic-pi-stereo_player')
+    })
+
+    it('defaults to stereo when numChans is omitted (back-compat, no regression)', () => {
+      expect(selectSamplePlayer({ rate: 0.8 })).toBe('sonic-pi-basic_stereo_player')
+      expect(selectSamplePlayer({ pitch: 2 })).toBe('sonic-pi-stereo_player')
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------
