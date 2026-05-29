@@ -167,7 +167,7 @@
         The right channel is <b>flat at zero</b> before the fix; populated and equal to the left after.
       </div>
       <div class="png-block">
-        <img src="sp107/kick-channels.png" alt="per-channel waveform: before fix R silent, after fix R=L, desktop R=L" />
+        <img src="sp107/kick-channels.png?v=2" alt="per-channel waveform: before fix R silent, after fix R=L, desktop R=L" />
         <div class="png-cap">Top (red): web before fix — R channel silent. Middle (green): web after fix — R = L = 0.109. Bottom (blue): desktop reference — R = L = 0.2265 (centered). The 0.48× per-channel level is the separate global WASM/native gain gap (#268), not this bug.</div>
       </div>
 
@@ -176,22 +176,22 @@
       <div class="sync-bar">
         <button class="sync-btn" data-group="kick" data-act="play">▶ Play all three</button>
         <button class="sync-btn sec" data-group="kick" data-act="stop">■ Stop</button>
-        <span class="sync-hint">Use headphones / a stereo setup — the "before" plays only in your left ear.</span>
+        <span class="sync-hint">Use headphones — the "before" plays only in your left ear. <em>Audio boosted ×3.75 for listening (shared across the three, so relative levels hold); raw capture peaks are in the L/R labels.</em></span>
       </div>
       <div class="audio-grid">
         <div class="card before">
           <h3>Web — before <span>basic_stereo_player</span></h3>
-          <audio data-group="kick" controls preload="metadata" src="sp107/kick-web-before.wav"></audio>
+          <audio data-group="kick" controls preload="metadata" src="sp107/kick-web-before.wav?v=2"></audio>
           <div class="lr">L <b>0.109</b> &nbsp; R <span class="silent">0.000 ✖ silent</span></div>
         </div>
         <div class="card after">
           <h3>Web — after <span>basic_mono_player</span></h3>
-          <audio data-group="kick" controls preload="metadata" src="sp107/kick-web-after.wav"></audio>
+          <audio data-group="kick" controls preload="metadata" src="sp107/kick-web-after.wav?v=2"></audio>
           <div class="lr">L <b>0.109</b> &nbsp; R <span class="ok">0.109 ✓ centered</span></div>
         </div>
         <div class="card ref">
           <h3>Desktop Sonic Pi <span>reference</span></h3>
-          <audio data-group="kick" controls preload="metadata" src="sp107/kick-desktop.wav"></audio>
+          <audio data-group="kick" controls preload="metadata" src="sp107/kick-desktop.wav?v=2"></audio>
           <div class="lr">L <b>0.2265</b> &nbsp; R <span class="ok">0.2265 ✓ centered</span></div>
         </div>
       </div>
@@ -290,20 +290,20 @@
       <div class="sync-bar">
         <button class="sync-btn" data-group="mb" data-act="play">▶ Play both</button>
         <button class="sync-btn sec" data-group="mb" data-act="stop">■ Stop</button>
-        <span class="sync-hint">kick (<code>:drums</code>) + <code>mod_saw</code> synth (delay 6) + snare (delay 12.5)</span>
+        <span class="sync-hint">drums (<code>:drum_heavy_kick</code>) + <code>mod_saw</code> synths + <code>:drum_snare_soft</code>. <em>Boosted ×1.72 for listening (shared desktop+web); raw peaks web 0.28 / desktop 0.49 in the table above.</em></span>
       </div>
       <div class="audio-grid" style="grid-template-columns: 1fr 1fr">
         <div class="card ref">
           <h3>Desktop Sonic Pi <span>reference</span></h3>
-          <audio data-group="mb" controls preload="metadata" src="sp107/monday-blues-desktop.wav"></audio>
+          <audio data-group="mb" controls preload="metadata" src="sp107/monday-blues-desktop.wav?v=2"></audio>
         </div>
         <div class="card after">
           <h3>Web — after fix <span>centered kick</span></h3>
-          <audio data-group="mb" controls preload="metadata" src="sp107/monday-blues-web-after.wav"></audio>
+          <audio data-group="mb" controls preload="metadata" src="sp107/monday-blues-web-after.wav?v=2"></audio>
         </div>
       </div>
       <div class="png-block" style="margin-top:12px">
-        <img src="sp107/monday-blues-spectrogram.png" alt="monday_blues spectrogram desktop vs web after fix" />
+        <img src="sp107/monday-blues-spectrogram.png?v=2" alt="monday_blues spectrogram desktop vs web after fix" />
         <div class="png-cap">Full monday_blues spectrogram — desktop vs web (after fix). L2 13.99 / MFCC 119.02; both channels centered (L=R).</div>
       </div>
 
