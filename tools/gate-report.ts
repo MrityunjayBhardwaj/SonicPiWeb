@@ -92,7 +92,7 @@ const md = [
   ``,
   `> Pass = MATCH or PRNG-VARIANT. Rows the pitch-trackers cannot grade are graded via an instrument-friendly projection that exercises the same engine logic (see \`tools/gate-reproducers/\`). The raw sweep keeps the unvarnished verdicts; this is the launch-gate computation.`,
   ``,
-  `> **Validity:** projection/refreshed verdicts are recorded evidence captured on a tree containing the engine fixes **#405** (play_pattern_timed) and **#409** (note octave). This gate result is valid once both are merged to main. Re-capture any reproducer with \`npx tsx tools/compare-desktop-vs-web.ts --file <reproducer.rb>\` and update the manifest evidence to refresh.`,
+  `> **Validity:** projection/refreshed verdicts are recorded evidence. The engine fixes they depend on — **#405** (play_pattern_timed, b4a2dc1) and **#409** (note octave, 8f38e2c) — are **merged to main**, and both projections were re-captured live against merged main (2026-05-29). Re-capture any reproducer with \`npx tsx tools/compare-desktop-vs-web.ts --file <reproducer.rb>\` and update the manifest evidence to refresh.`,
   ``,
   `| Row | raw sweep | gate verdict | graded via | detail |`,
   `|---|---|---|---|---|`,
