@@ -821,7 +821,7 @@ end
 
 ## 11. Random
 
-All random functions use a seeded Mersenne Twister (MT19937), matching desktop Sonic Pi's deterministic behavior.
+All random functions use a seeded Mersenne Twister (MT19937). They are **deterministic and seed-stable within SonicPi.js** — the same seed always produces the same sequence here. The values are **not** identical to desktop Sonic Pi, though: desktop replays a frozen random-number table rather than a live PRNG, so `choose` / `rrand_i` / etc. draw different elements cross-engine — a randomness-driven piece sounds different from desktop (same shape, different notes). Matching desktop's exact random stream is a deliberate v1 non-goal.
 
 ### `rrand(min, max)`
 

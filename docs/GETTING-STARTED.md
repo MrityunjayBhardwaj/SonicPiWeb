@@ -541,7 +541,6 @@ SonicPi.js aims to be compatible with the desktop version's Ruby DSL. Here is wh
 - `play`, `sleep`, `sample`, `live_loop`, `in_thread`
 - `use_synth`, `with_fx`, `use_bpm`
 - `chord`, `scale`, `ring`, `tick`
-- `rrand`, `choose`, `one_in`, `use_random_seed`
 - `sync`, `cue`, `at`, `density`
 - `spread` (Euclidean rhythms)
 - Ruby-style syntax (`:symbols`, `do...end` blocks, `.times`, `.each`)
@@ -549,6 +548,7 @@ SonicPi.js aims to be compatible with the desktop version's Ruby DSL. Here is wh
 **Different:**
 - Runs in the browser using WebAudio + SuperSonic (scsynth compiled to WebAssembly), not a native SuperCollider server.
 - Synth and sample sets are limited to those listed above. Desktop Sonic Pi has a larger library.
+- **Random values differ from desktop.** `rrand`, `choose`, `one_in`, `use_random_seed` etc. are fully deterministic and seed-stable *within* SonicPi.js — the same seed always produces the same sequence here. But the actual values are **not** identical to desktop Sonic Pi: desktop replays a frozen random-number table, while SonicPi.js computes a live Mersenne Twister (MT19937). So a randomness-driven piece (e.g. `play scale(:c, :minor).choose`) sounds *different* from desktop — same shape, different notes. Matching desktop's exact random stream is a deliberate non-goal for v1.
 - Audio latency depends on your browser. Chrome typically performs best.
 - MIDI and OSC output are not yet supported.
 - `run_file` and `load_sample` from disk are not available in the browser.
