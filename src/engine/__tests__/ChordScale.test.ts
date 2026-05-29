@@ -179,6 +179,24 @@ describe('note', () => {
   it('passes through MIDI numbers', () => {
     expect(note(60)).toBe(60)
   })
+
+  // #408 — octave: opt SETS the absolute octave (desktop parity). Without this
+  // the opt was silently dropped, playing 2 octaves too high.
+  it('octave: opt sets the absolute octave', () => {
+    expect(note('F', { octave: 2 })).toBe(41) // F2, identical to :F2 literal
+    expect(note('F')).toBe(65) // F4 default unchanged
+    expect(note('c', { octave: 4 })).toBe(60) // middle C
+    expect(note('c', { octave: 5 })).toBe(72)
+  })
+
+  it('octave: opt overrides an octave already in the name', () => {
+    expect(note('F5', { octave: 2 })).toBe(41) // name octave 5 overridden → F2
+  })
+
+  it('no octave: opt leaves the note unchanged', () => {
+    expect(note('a4', {})).toBe(69)
+    expect(note('a4')).toBe(69)
+  })
 })
 
 describe('note_range', () => {

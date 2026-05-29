@@ -279,8 +279,19 @@ export function chord_invert(notes: Ring<number> | number[], inversion: number):
  *
  * note(:c4) → 60
  */
-export function note(n: string | number): number {
-  return noteToMidi(n)
+export function note(n: string | number, opts?: Record<string, unknown>): number {
+  const base = noteToMidi(n)
+  // The `octave:` opt SETS the absolute octave (desktop parity, #408): it
+  // overrides any octave in the name. `note(:F, octave: 2)` → F2 = 41,
+  // identical to the `:F2` literal. C4=60 convention: octave N's C = (N+1)*12.
+  // Without this the opt was silently dropped (note(:F, octave:2) === note(:F)),
+  // playing 2 octaves too high — surfaced by the monday_blues gate reproducer.
+  const octave = opts?.octave
+  if (typeof octave === 'number' && Number.isFinite(octave)) {
+    const pitchClass = ((base % 12) + 12) % 12
+    return (octave + 1) * 12 + pitchClass
+  }
+  return base
 }
 
 /**
