@@ -1,0 +1,74 @@
+{
+  "$comment": "Reproducer-as-gate-verdict manifest (#407). For PRNG-free non-heavy gate rows the standard pitch-trackers cannot grade (polyphonic/method-asymmetry/onset-blind), we grade an instrument-friendly PROJECTION that exercises the SAME engine logic on gradeable material, and record ITS verdict as the gate verdict — annotated 'graded via projection'. The raw sweep (examples-sweep.json) keeps the unvarnished INCONCL verdicts; this overlay is the launch-gate computation. tools/gate-report.ts consumes this.",
+  "denominator": "PRNG-free non-heavy official rows (per launch_acceptance_criteria / dharana §28)",
+  "gateThresholdPct": 70,
+  "reproducers": [
+    {
+      "example": "chord_inversions",
+      "reproducer": "tools/gate-reproducers/chord_inversions.rb",
+      "blindReason": "#374 — polyphonic play_chord arpeggios; contour tracker emits out-of-set noise on BOTH sides (desktop pc-set {0,4,5,6,7,8,9,10,11} vs web {0,1,4,5,8,9,10,11}); no affirmative MATCH extractable from the real capture.",
+      "projection": "Arpeggiate the same chord_degree(d,:c,:major,3,invert:i) chords + staccato (release 0.05, sleep 0.5) → onset conf 1. Grades the exact engine logic under test (chord_degree + inversion), synth/voicing-independent.",
+      "requires": [],
+      "evidence": {
+        "report": "compare_2026-05-29T08-09-02-422Z_chord_inversions_repro.md",
+        "verdict": "match",
+        "method": "onset/onset conf 1",
+        "desktop": "48,52,55,52,55,60,55,60,64,60,64,67,64,67,72,67",
+        "web": "48,52,55,52,55,60,55,60,64,60,64,67,64,67,72",
+        "note": "PITCH-MATCH over 15 notes"
+      }
+    },
+    {
+      "example": "monday_blues",
+      "reproducer": "tools/gate-reproducers/monday_blues.rb",
+      "blindReason": "#376 — method asymmetry: the heavy_kick dominates web's onset tracker while desktop locks onto the sustained mod_saw (desktop onset pc {3,4,5} vs web contour pc {0,2,4,5,7}); non-comparable.",
+      "projection": "Isolate the DETERMINISTIC :synths ring (:F,:C,:D,:D,:G,:C,:D,:D) — note(n, octave: 2) monophonic + staccato, :beep (pitch logic is synth-independent; mod_saw FM confuses the onset tracker ~1 semitone). Grades note-name + octave resolution + ring.",
+      "requires": ["#409 note(octave:) fix — without it web plays +24 semitones (the projection itself surfaced this engine bug, SP106)"],
+      "evidence": {
+        "report": "compare_2026-05-29T08-24-40-826Z_monday_blues.md",
+        "verdict": "match",
+        "method": "onset/onset conf 1",
+        "desktop": "41,40,40,40,43,40,40,40,41,40,40,40,43,40,40,40",
+        "web": "41,40,40,40,43,40,40,40,41,40,40,40,43,40,40",
+        "note": "PITCH-MATCH over 15 notes; /s_new ground truth confirms ring@oct2 = 41,36,38,38,43 (F2,C2,D2,D2,G2)"
+      }
+    }
+  ],
+  "limitations": [
+    {
+      "example": "bach",
+      "verdict": "inconcl",
+      "reason": "Sustained :beep polyphony — desktop onset detector finds ~3 onsets in 9s (#368); the web capture renders the full ~95s composition vs the windowed desktop capture (#406). No faithful gradeable projection: a monophonic literal-note list would test almost nothing (bach's substance is timing + concurrent in_thread alignment, exactly what's not onset-gradeable).",
+      "engineEvidence": "Engine verified correct via the deterministic event-log timeline (#404/#405): web spans 95.2s ≈ the 95.5s score, section-2 RH (note 83) lands at t=48.0/72.0 — exact score anchors. For a no-PRNG piece the event log IS ground truth for scheduling.",
+      "countsAsPass": false
+    },
+    {
+      "example": "dark_neon",
+      "verdict": "inconcl",
+      "reason": "One sustained note (:cs1) + a sample texture, not a melody — Tier-1 pitch comparison is the wrong lens entirely. A reproducer would test a single note, which is not meaningful musical-correctness coverage.",
+      "engineEvidence": "No pitch-sequence to verify; the relevant engine paths (FX chain routing, sample playback) are covered by the FX-sweep / sample tooling, not Tier-1 pitch.",
+      "countsAsPass": false
+    }
+  ],
+  "refreshed": [
+    {
+      "example": "mod_303_phade",
+      "reason": "examples-sweep.json is a 2026-05-28 snapshot predating the #403 (SP104 with_fx sustain) merge, where this row read INCONCL. Re-measured on current main (all fixes present) — now a genuine raw MATCH (not a projection).",
+      "evidence": {
+        "report": "compare_2026-05-29T08-33-35-255Z_mod_303_phade.md",
+        "verdict": "match",
+        "method": "onset/onset conf 1",
+        "desktop": "45,45,45,45,45,45,45,45,45,45,45,45,45",
+        "web": "45,45,45,45,45,45,45,45,45,45,45",
+        "note": "PITCH-MATCH over 11 notes; confirms PR #403"
+      }
+    }
+  ],
+  "exclusions": [
+    {
+      "example": "ambient_experiment",
+      "reason": "Uses choose([:D4,:E4]) etc. — PRNG-driven. Cross-engine PRNG parity is a declared v1 NON-GOAL (SV49), so it is excluded from the PRNG-free gate denominator (it belongs with the other ~22 PRNG rows). The post-SP104 framing wrongly counted it in the denom.",
+      "classifier": "examples-sweep.json prng=true"
+    }
+  ]
+}

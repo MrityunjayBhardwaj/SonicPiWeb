@@ -1,0 +1,73 @@
+{
+  "generatedFrom": "examples-sweep.json + tools/gate-reproducers/manifest.json",
+  "denominator": 7,
+  "passCount": 5,
+  "pct": 71.4,
+  "thresholdPct": 70,
+  "passed": true,
+  "rows": [
+    {
+      "example": "chord_inversions",
+      "rawVerdict": "inconcl",
+      "gateVerdict": "match",
+      "pass": true,
+      "gradedVia": "projection",
+      "detail": "tools/gate-reproducers/chord_inversions.rb → compare_2026-05-29T08-09-02-422Z_chord_inversions_repro.md"
+    },
+    {
+      "example": "reich_phase",
+      "rawVerdict": "match",
+      "gateVerdict": "match",
+      "pass": true,
+      "gradedVia": "raw-sweep",
+      "detail": ""
+    },
+    {
+      "example": "dark_neon",
+      "rawVerdict": "inconcl",
+      "gateVerdict": "inconcl",
+      "pass": false,
+      "gradedVia": "documented-limitation",
+      "detail": "One sustained note (:cs1) + a sample texture, not a melody — Tier-1 pitch comparison is the wrong lens entirely. A reproducer would test a single note, which is not meaningful musical-correctness coverage."
+    },
+    {
+      "example": "mod_303_phade",
+      "rawVerdict": "inconcl",
+      "gateVerdict": "match",
+      "pass": true,
+      "gradedVia": "raw-refreshed",
+      "detail": "re-measured → compare_2026-05-29T08-33-35-255Z_mod_303_phade.md"
+    },
+    {
+      "example": "bach",
+      "rawVerdict": "inconcl",
+      "gateVerdict": "inconcl",
+      "pass": false,
+      "gradedVia": "documented-limitation",
+      "detail": "Sustained :beep polyphony — desktop onset detector finds ~3 onsets in 9s (#368); the web capture renders the full ~95s composition vs the windowed desktop capture (#406). No faithful gradeable projection: a monophonic literal-note list would test almost nothing (bach's substance is timing + concurrent in_thread alignment, exactly what's not onset-gradeable)."
+    },
+    {
+      "example": "driving_pulse",
+      "rawVerdict": "match",
+      "gateVerdict": "match",
+      "pass": true,
+      "gradedVia": "raw-sweep",
+      "detail": ""
+    },
+    {
+      "example": "monday_blues",
+      "rawVerdict": "inconcl",
+      "gateVerdict": "match",
+      "pass": true,
+      "gradedVia": "projection",
+      "detail": "tools/gate-reproducers/monday_blues.rb → compare_2026-05-29T08-24-40-826Z_monday_blues.md · requires #409 note(octave:) fix — without it web plays +24 semitones (the projection itself surfaced this engine bug, SP106)"
+    }
+  ],
+  "exclusions": [
+    {
+      "example": "ambient_experiment",
+      "reason": "Uses choose([:D4,:E4]) etc. — PRNG-driven. Cross-engine PRNG parity is a declared v1 NON-GOAL (SV49), so it is excluded from the PRNG-free gate denominator (it belongs with the other ~22 PRNG rows). The post-SP104 framing wrongly counted it in the denom.",
+      "classifier": "examples-sweep.json prng=true"
+    }
+  ]
+}
