@@ -10,12 +10,12 @@
       "projection": "Arpeggiate the same chord_degree(d,:c,:major,3,invert:i) chords + staccato (release 0.05, sleep 0.5) → onset conf 1. Grades the exact engine logic under test (chord_degree + inversion), synth/voicing-independent.",
       "requires": [],
       "evidence": {
-        "report": "compare_2026-05-29T08-09-02-422Z_chord_inversions_repro.md",
+        "report": "compare_2026-05-29T16-00-01-355Z_chord_inversions.md",
         "verdict": "match",
         "method": "onset/onset conf 1",
         "desktop": "48,52,55,52,55,60,55,60,64,60,64,67,64,67,72,67",
         "web": "48,52,55,52,55,60,55,60,64,60,64,67,64,67,72",
-        "note": "PITCH-MATCH over 15 notes"
+        "note": "PITCH-MATCH over 15 notes; re-captured live on merged main (#405+#409)"
       }
     },
     {
@@ -23,14 +23,14 @@
       "reproducer": "tools/gate-reproducers/monday_blues.rb",
       "blindReason": "#376 — method asymmetry: the heavy_kick dominates web's onset tracker while desktop locks onto the sustained mod_saw (desktop onset pc {3,4,5} vs web contour pc {0,2,4,5,7}); non-comparable.",
       "projection": "Isolate the DETERMINISTIC :synths ring (:F,:C,:D,:D,:G,:C,:D,:D) — note(n, octave: 2) monophonic + staccato, :beep (pitch logic is synth-independent; mod_saw FM confuses the onset tracker ~1 semitone). Grades note-name + octave resolution + ring.",
-      "requires": ["#409 note(octave:) fix — without it web plays +24 semitones (the projection itself surfaced this engine bug, SP106)"],
+      "requires": ["#409 note(octave:) fix (MERGED 8f38e2c) — without it web played +24 semitones; the projection itself surfaced this engine bug, SP106"],
       "evidence": {
-        "report": "compare_2026-05-29T08-24-40-826Z_monday_blues.md",
+        "report": "compare_2026-05-29T15-58-36-335Z_monday_blues.md",
         "verdict": "match",
         "method": "onset/onset conf 1",
         "desktop": "41,40,40,40,43,40,40,40,41,40,40,40,43,40,40,40",
         "web": "41,40,40,40,43,40,40,40,41,40,40,40,43,40,40",
-        "note": "PITCH-MATCH over 15 notes; /s_new ground truth confirms ring@oct2 = 41,36,38,38,43 (F2,C2,D2,D2,G2)"
+        "note": "PITCH-MATCH over 15 notes; re-captured live on merged main; /s_new ground truth confirms ring@oct2 = 41,36,38,38,43 (F2,C2,D2,D2,G2)"
       }
     }
   ],

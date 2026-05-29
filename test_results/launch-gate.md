@@ -4,17 +4,17 @@
 
 > Pass = MATCH or PRNG-VARIANT. Rows the pitch-trackers cannot grade are graded via an instrument-friendly projection that exercises the same engine logic (see `tools/gate-reproducers/`). The raw sweep keeps the unvarnished verdicts; this is the launch-gate computation.
 
-> **Validity:** projection/refreshed verdicts are recorded evidence captured on a tree containing the engine fixes **#405** (play_pattern_timed) and **#409** (note octave). This gate result is valid once both are merged to main. Re-capture any reproducer with `npx tsx tools/compare-desktop-vs-web.ts --file <reproducer.rb>` and update the manifest evidence to refresh.
+> **Validity:** projection/refreshed verdicts are recorded evidence. The engine fixes they depend on — **#405** (play_pattern_timed, b4a2dc1) and **#409** (note octave, 8f38e2c) — are **merged to main**, and both projections were re-captured live against merged main (2026-05-29). Re-capture any reproducer with `npx tsx tools/compare-desktop-vs-web.ts --file <reproducer.rb>` and update the manifest evidence to refresh.
 
 | Row | raw sweep | gate verdict | graded via | detail |
 |---|---|---|---|---|
-| ✅ chord_inversions | inconcl | match | projection | tools/gate-reproducers/chord_inversions.rb → compare_2026-05-29T08-09-02-422Z_chord_inversions_repro.md |
+| ✅ chord_inversions | inconcl | match | projection | tools/gate-reproducers/chord_inversions.rb → compare_2026-05-29T16-00-01-355Z_chord_inversions.md |
 | ✅ reich_phase | match | match | raw-sweep |  |
 | ⚠️ dark_neon | inconcl | inconcl | documented-limitation | One sustained note (:cs1) + a sample texture, not a melody — Tier-1 pitch comparison is the wrong lens entirely. A reproducer would test a single note, which is not meaningful musical-correctness coverage. |
 | ✅ mod_303_phade | inconcl | match | raw-refreshed | re-measured → compare_2026-05-29T08-33-35-255Z_mod_303_phade.md |
 | ⚠️ bach | inconcl | inconcl | documented-limitation | Sustained :beep polyphony — desktop onset detector finds ~3 onsets in 9s (#368); the web capture renders the full ~95s composition vs the windowed desktop capture (#406). No faithful gradeable projection: a monophonic literal-note list would test almost nothing (bach's substance is timing + concurrent in_thread alignment, exactly what's not onset-gradeable). |
 | ✅ driving_pulse | match | match | raw-sweep |  |
-| ✅ monday_blues | inconcl | match | projection | tools/gate-reproducers/monday_blues.rb → compare_2026-05-29T08-24-40-826Z_monday_blues.md · requires #409 note(octave:) fix — without it web plays +24 semitones (the projection itself surfaced this engine bug, SP106) |
+| ✅ monday_blues | inconcl | match | projection | tools/gate-reproducers/monday_blues.rb → compare_2026-05-29T15-58-36-335Z_monday_blues.md · requires #409 note(octave:) fix (MERGED 8f38e2c) — without it web played +24 semitones; the projection itself surfaced this engine bug, SP106 |
 
 ## Excluded from denominator (SV49 — cross-engine PRNG is a v1 non-goal)
 - **ambient_experiment** — Uses choose([:D4,:E4]) etc. — PRNG-driven. Cross-engine PRNG parity is a declared v1 NON-GOAL (SV49), so it is excluded from the PRNG-free gate denominator (it belongs with the other ~22 PRNG rows). The post-SP104 framing wrongly counted it in the denom.

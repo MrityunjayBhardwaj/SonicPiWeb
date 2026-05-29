@@ -12,7 +12,7 @@
       "gateVerdict": "match",
       "pass": true,
       "gradedVia": "projection",
-      "detail": "tools/gate-reproducers/chord_inversions.rb → compare_2026-05-29T08-09-02-422Z_chord_inversions_repro.md"
+      "detail": "tools/gate-reproducers/chord_inversions.rb → compare_2026-05-29T16-00-01-355Z_chord_inversions.md"
     },
     {
       "example": "reich_phase",
@@ -60,7 +60,7 @@
       "gateVerdict": "match",
       "pass": true,
       "gradedVia": "projection",
-      "detail": "tools/gate-reproducers/monday_blues.rb → compare_2026-05-29T08-24-40-826Z_monday_blues.md · requires #409 note(octave:) fix — without it web plays +24 semitones (the projection itself surfaced this engine bug, SP106)"
+      "detail": "tools/gate-reproducers/monday_blues.rb → compare_2026-05-29T15-58-36-335Z_monday_blues.md · requires #409 note(octave:) fix (MERGED 8f38e2c) — without it web played +24 semitones; the projection itself surfaced this engine bug, SP106"
     }
   ],
   "exclusions": [
