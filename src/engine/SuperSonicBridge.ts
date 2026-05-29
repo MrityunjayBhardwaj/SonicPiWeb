@@ -1262,6 +1262,7 @@ export class SuperSonicBridge {
   freeSample(name: string): boolean {
     const had = this.loadedSamples.delete(name)
     this.sampleDurations.delete(name)
+    this.sampleChannels.delete(name)
     return had
   }
 
@@ -1270,6 +1271,7 @@ export class SuperSonicBridge {
     const count = this.loadedSamples.size
     this.loadedSamples.clear()
     this.sampleDurations.clear()
+    this.sampleChannels.clear()
     return count
   }
 
@@ -1357,5 +1359,8 @@ export class SuperSonicBridge {
     }
     this.loadedSynthDefs.clear()
     this.loadedSamples.clear()
+    this.sampleDurations.clear()
+    this.sampleChannels.clear()
+    this.pendingSampleChannels.clear()
   }
 }
