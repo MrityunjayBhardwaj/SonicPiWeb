@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SonicPi.js — Launch Gate</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 0; background: #0e1014; color: #e6e6e6; }
+  .tab-bar { display: flex; gap: 4px; padding: 10px 16px; background: #15181f; border-bottom: 1px solid #262b36; align-items: center; }
+  .tab-bar a { color: #9aa4b2; text-decoration: none; padding: 4px 10px; border-radius: 6px; }
+  .tab-bar a[data-active] { background: #2a3140; color: #fff; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .verdict { font-size: 26px; font-weight: 700; margin: 14px 0; }
+  .verdict.pass { color: #4ade80; }
+  .verdict.fail { color: #f87171; }
+  .note { color: #9aa4b2; max-width: 80ch; margin: 8px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 18px 0; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #262b36; vertical-align: top; }
+  th { color: #9aa4b2; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  tr.pass td:first-child { border-left: 3px solid #4ade80; }
+  tr.warn td:first-child { border-left: 3px solid #fbbf24; }
+  tr.fail td:first-child { border-left: 3px solid #f87171; }
+  code { background: #1b1f29; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .detail { color: #9aa4b2; font-size: 12px; }
+  .excl li { color: #9aa4b2; margin: 4px 0; }
+</style></head>
+<body>
+  <nav class="tab-bar">
+    <a href="index.html">FX A/B</a>
+    <a href="e2e.html">E2E suite</a>
+    <a href="community.html">community + forum</a>
+    <a href="launch-gate.html" data-active="1">🚦 Launch Gate</a>
+  </nav>
+  <div class="wrap">
+    <h1>Launch Gate — PRNG-free non-heavy official roster</h1>
+    <div class="verdict pass">5/7 = 71.4% · threshold ≥70% · ✅ PASS</div>
+    <p class="note">Pass = MATCH or PRNG-VARIANT. Rows the pitch-trackers cannot grade are graded via an instrument-friendly <b>projection</b> that exercises the same engine logic (<code>tools/gate-reproducers/</code>). The raw sweep keeps the unvarnished verdicts; this is the launch-gate computation. Projection verdicts depend on #405 + #409 (merged), re-captured live on merged main.</p>
+    <table>
+      <thead><tr><th>Row</th><th>Raw sweep</th><th>Gate verdict</th><th>Graded via</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr class="pass"><td>✅ chord_inversions</td><td>inconcl</td><td><b>match</b></td><td>projection</td><td class="detail">tools/gate-reproducers/chord_inversions.rb → compare_2026-05-29T16-00-01-355Z_chord_inversions.md</td></tr>
+        <tr class="pass"><td>✅ reich_phase</td><td>match</td><td><b>match</b></td><td>raw-sweep</td><td class="detail"></td></tr>
+        <tr class="warn"><td>⚠️ dark_neon</td><td>inconcl</td><td><b>inconcl</b></td><td>documented-limitation</td><td class="detail">One sustained note (:cs1) + a sample texture, not a melody — Tier-1 pitch comparison is the wrong lens entirely. A reproducer would test a single note, which is not meaningful musical-correctness coverage.</td></tr>
+        <tr class="pass"><td>✅ mod_303_phade</td><td>inconcl</td><td><b>match</b></td><td>raw-refreshed</td><td class="detail">re-measured → compare_2026-05-29T08-33-35-255Z_mod_303_phade.md</td></tr>
+        <tr class="warn"><td>⚠️ bach</td><td>inconcl</td><td><b>inconcl</b></td><td>documented-limitation</td><td class="detail">Sustained :beep polyphony — desktop onset detector finds ~3 onsets in 9s (#368); the web capture renders the full ~95s composition vs the windowed desktop capture (#406). No faithful gradeable projection: a monophonic literal-note list would test almost nothing (bach's substance is timing + concurrent in_thread alignment, exactly what's not onset-gradeable).</td></tr>
+        <tr class="pass"><td>✅ driving_pulse</td><td>match</td><td><b>match</b></td><td>raw-sweep</td><td class="detail"></td></tr>
+        <tr class="pass"><td>✅ monday_blues</td><td>inconcl</td><td><b>match</b></td><td>projection</td><td class="detail">tools/gate-reproducers/monday_blues.rb → compare_2026-05-29T15-58-36-335Z_monday_blues.md · requires #409 note(octave:) fix (MERGED 8f38e2c) — without it web played +24 semitones; the projection itself surfaced this engine bug, SP106</td></tr>
+      </tbody>
+    </table>
+    <h2 style="font-size:15px">Excluded from denominator <span class="detail">(SV49 — cross-engine PRNG is a v1 non-goal)</span></h2>
+    <ul class="excl">
+      <li><b>ambient_experiment</b> — Uses choose([:D4,:E4]) etc. — PRNG-driven. Cross-engine PRNG parity is a declared v1 NON-GOAL (SV49), so it is excluded from the PRNG-free gate denominator (it belongs with the other ~22 PRNG rows). The post-SP104 framing wrongly counted it in the denom.</li>
+    </ul>
+    <p class="detail">Generated by <code>tools/gate-report.ts</code> from <code>examples-sweep.json</code> + <code>tools/gate-reproducers/manifest.json</code>. Re-run: <code>npx tsx tools/gate-report.ts</code>.</p>
+  </div>
+</body></html>
