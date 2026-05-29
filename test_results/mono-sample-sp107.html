@@ -156,7 +156,7 @@
           <li><b>The measurement trap:</b> the prior session's "0.24× attenuated kick" was an artifact of mono-averaging a left-only signal. Reading L and R <em>separately</em> revealed <code>R=0</code> — a channel bug masquerading as a gain bug.</li>
           <li><b>Root cause:</b> <code>selectSamplePlayer(opts)</code> branched only on opt-complexity; it never read the sample's channel count. Desktop's <code>resolve_specific_sampler(num_chans, args_h)</code> (sound.rb:3470-3478) picks <code>basic_mono_player</code> for 1-channel samples (which Pan2-centers).</li>
           <li><b>The fix (PR #415):</b> add the channel-count axis — cache <code>audioBuffer.numberOfChannels</code> from the existing decode, resolve it before player selection, use mono players for mono samples. Pure synthdef-name swap; zero param-translation change; defaults to stereo (no regression).</li>
-          <li><b>Verified Level-3:</b> web kick R-channel <b class="ratio-good">0.000 → 0.1090</b> (centered); <code>monday_blues</code> <b class="ratio-good">L2 31.2→9.3, MFCC 260→106</b>; launch gate stays <b>5/7 = 71.4% PASS</b>.</li>
+          <li><b>Verified Level-3:</b> web kick R-channel <b class="ratio-good">0.000 → 0.1090</b> (centered, deterministic); full <code>monday_blues</code> <b class="ratio-good">L2 31.2→14.0, MFCC 260→119</b>; launch gate stays <b>5/7 = 71.4% PASS</b>.</li>
         </ol>
       </div>
 
@@ -269,16 +269,22 @@
           <tr><td>MFCC dist (vs desktop)</td><td class="num">—</td><td class="num ratio-mid">200.4</td><td class="num ratio-good">161.3</td></tr>
         </tbody>
       </table>
-      <p class="col-label" style="margin-top:18px">monday_blues — the original symptom</p>
+      <p class="col-label" style="margin-top:18px">monday_blues — the original symptom (full composition, the code below)</p>
       <table class="metrics">
         <thead><tr><th>Metric</th><th class="num">Before fix</th><th class="num">After fix</th></tr></thead>
         <tbody>
-          <tr><td>L2 (mel-dB) vs desktop</td><td class="num ratio-bad">31.17</td><td class="num ratio-good">9.34</td></tr>
-          <tr><td>MFCC dist vs desktop</td><td class="num ratio-bad">259.75</td><td class="num ratio-good">106.21</td></tr>
-          <tr><td>Sub-share gap (desktop↔web, same run)</td><td class="num ratio-bad">54 pt</td><td class="num ratio-good">4.6 pt</td></tr>
-          <tr><td>Web sub &lt;80 Hz share</td><td class="num ratio-bad">30.2%</td><td class="num ratio-good">46.3%</td></tr>
+          <tr><td>L2 (mel-dB) vs desktop</td><td class="num ratio-bad">31.17</td><td class="num ratio-good">13.99</td></tr>
+          <tr><td>MFCC dist vs desktop</td><td class="num ratio-bad">259.75</td><td class="num ratio-good">119.02</td></tr>
+          <tr><td>Sub-share gap (desktop↔web, same run)</td><td class="num ratio-bad">54 pt</td><td class="num ratio-good">1.6 pt</td></tr>
+          <tr><td>Web sub &lt;80 Hz share (vs desktop, same run)</td><td class="num ratio-bad">30.2%</td><td class="num ratio-good">40.2% (vs 38.6%)</td></tr>
         </tbody>
       </table>
+      <div class="lede" style="margin-top:8px; font-size:12.5px">
+        <b>Honesty note:</b> the kick-isolated R-channel (0.000→0.1090) is the <em>deterministic</em> proof — exact, repeatable.
+        The full-composition L2/MFCC and per-band absolutes are <em>run-to-run noisy</em> (three live_loops at 0.5/1.0/1.0&nbsp;beat
+        periods phase differently against the 8&nbsp;s capture window), so read them as corroborating direction, not exact deltas.
+        The "before" figures are the 2026-05-29 full-composition capture; "after" is the run traced below.
+      </div>
 
       <h2 id="mb-audio">monday_blues — after the fix (A/B)</h2>
       <div class="sync-bar">
@@ -298,7 +304,87 @@
       </div>
       <div class="png-block" style="margin-top:12px">
         <img src="sp107/monday-blues-spectrogram.png" alt="monday_blues spectrogram desktop vs web after fix" />
-        <div class="png-cap">monday_blues spectrogram — desktop vs web (after fix). L2 9.34 / MFCC 106.21.</div>
+        <div class="png-cap">Full monday_blues spectrogram — desktop vs web (after fix). L2 13.99 / MFCC 119.02; both channels centered (L=R).</div>
+      </div>
+
+      <!-- ================= FULL CODE END-TO-END ================= -->
+      <h2 id="endtoend">Full code, end to end — how the engine runs this composition</h2>
+      <div class="lede">
+        The fix is one line of selection logic, but it sits inside a full pipeline. Here is the exact
+        <code>monday_blues</code> source and how every construct in it flows from Ruby text to scsynth audio —
+        each claim below is read straight from the web engine's event log for this run (Level&nbsp;2 inference),
+        with the audio confirmed at Level&nbsp;3 above.
+      </div>
+
+      <pre class="code"><span class="key">use_debug</span> false
+
+<span class="key">live_loop</span> :drums <span class="key">do</span>
+  puts <span class="str">"slow drums"</span>
+  <span class="num">6</span>.times <span class="key">do</span>
+    sample :drum_heavy_kick, rate: <span class="num">0.8</span>
+    sleep <span class="num">0.5</span>
+  <span class="key">end</span>
+  puts <span class="str">"fast drums"</span>
+  <span class="num">8</span>.times <span class="key">do</span>
+    sample :drum_heavy_kick, rate: <span class="num">0.8</span>
+    sleep <span class="num">0.125</span>
+  <span class="key">end</span>
+<span class="key">end</span>
+
+<span class="key">live_loop</span> :synths <span class="key">do</span>
+  use_synth :mod_saw
+  use_synth_defaults amp: <span class="num">0.5</span>, attack: <span class="num">0</span>, sustain: <span class="num">1</span>, release: <span class="num">0.25</span>, mod_range: <span class="num">12</span>, mod_phase: <span class="num">0.5</span>, mod_invert_wave: <span class="num">1</span>
+  notes = (ring :F, :C, :D, :D, :G, :C, :D, :D)
+  notes.each <span class="key">do</span> |n|
+    tick
+    play note(n, octave: <span class="num">1</span>), cutoff: (line <span class="num">90</span>, <span class="num">130</span>, steps: <span class="num">16</span>).look
+    play note(n, octave: <span class="num">2</span>), cutoff: (line <span class="num">90</span>, <span class="num">130</span>, steps: <span class="num">32</span>).look
+    sleep <span class="num">1</span>
+  <span class="key">end</span>
+<span class="key">end</span>
+
+<span class="key">live_loop</span> :snare <span class="key">do</span>
+  sample :drum_snare_soft
+  sleep <span class="num">1</span>
+<span class="key">end</span></pre>
+
+      <p class="col-label" style="margin-top:18px">The pipeline — Ruby text → audio</p>
+      <ul class="probes">
+        <li><b>1 · Transpile</b> <code>Transpiler.ts</code> — tree-sitter partial fold over the Sonic-Pi Ruby subset turns the source into JS. <code>6.times do…end</code>, <code>notes.each do |n|…end</code>, blocks, and the <code>(ring …)</code> / <code>(line …)</code> paren-call forms are all recognised; bare <code>notes = …</code> is emitted as a bare assignment so the sandbox Proxy can capture it. Falls back to the regex transpiler if tree-sitter fails.</li>
+        <li><b>2 · Sandbox</b> <code>createIsolatedExecutor()</code> — user JS runs inside <code>with(__scope__)</code>; the Proxy's <code>has()</code> returns true for everything so <code>notes = …</code> writes into scope-isolated storage. <code>use_synth</code> / <code>use_synth_defaults</code> set thread-local state read by later <code>play</code> calls.</li>
+        <li><b>3 · ProgramBuilder</b> builds <code>Step[]</code> (the free monad) — one <code>live_loop</code> registration per loop; inside, each <code>sample</code> / <code>play</code> / <code>sleep</code> is a Step. <code>tick</code>/<code>look</code> advance and read a per-loop counter; <code>(line 90,130,steps:N).look</code> resolves to a concrete <code>cutoff</code> at build time per iteration.</li>
+        <li><b>4 · VirtualTimeScheduler</b> — the core innovation: each <code>sleep</code> returns a Promise that only the scheduler resolves. The three live_loops run as cooperative coroutines in virtual time — drums advancing 0.5/0.125&nbsp;beats, synths 1&nbsp;beat, snare 1&nbsp;beat — interleaved deterministically, no thread blocking.</li>
+        <li><b>5 · AudioInterpreter</b> walks the <code>Step[]</code> and dispatches each <code>play</code>/<code>sample</code> to <code>SuperSonicBridge</code> at its virtual-time-mapped audio time.</li>
+        <li><b>6 · SoundLayer</b> normalises params: <code>note(:F, octave:1)</code>→MIDI <code>29</code> (the #409 fix), symbol resolution, <code>cutoff</code> kept for synths / aliased to <code>lpf</code> for samples, BPM time-scaling. <b>It also decides nothing about channels — that is the player layer (the SP107 fix).</b></li>
+        <li class="key"><b>7 · SuperSonicBridge</b> <code>selectSamplePlayer(opts, numChans)</code> — reads the cached channel count and routes each sample to its player. <b>Both <code>:drum_heavy_kick</code> and <code>:drum_snare_soft</code> are mono → <code>basic_mono_player</code></b> (post-fix, centered). Emits <code>/s_new</code> to the per-loop track bus.</li>
+        <li><b>8 · scsynth (WASM)</b> renders each node; per-loop track buses (16/18/20) mix to the master and out to Web Audio.</li>
+      </ul>
+
+      <p class="col-label" style="margin-top:18px">Construct → what the engine actually did (read from this run's event log)</p>
+      <table class="metrics">
+        <thead><tr><th>Source construct</th><th>Observed in <code>/s_new</code></th></tr></thead>
+        <tbody>
+          <tr><td><code>sample :drum_heavy_kick, rate: 0.8</code></td><td><code>"…basic_mono_player" {buf:0, rate:0.8, out_bus:16}</code> — mono player, centered ✓</td></tr>
+          <tr><td><code>sample :drum_snare_soft</code></td><td><code>"…basic_mono_player" {buf:1, out_bus:20}</code> — also mono, also centered ✓</td></tr>
+          <tr><td><code>play note(:F, octave: 1)</code></td><td><code>note: 29</code> (F1) — octave: honored (#409)</td></tr>
+          <tr><td><code>play note(:F, octave: 2)</code></td><td><code>note: 41</code> (F2) — emitted at the same virtual time → polyphony</td></tr>
+          <tr><td><code>note(:C/:D, octave: 1/2)</code></td><td><code>24/36</code> (C1/C2), <code>26/38</code> (D1/D2) — ring + octave resolution correct</td></tr>
+          <tr><td><code>cutoff: (line 90,130, steps:16).look</code></td><td><code>cutoff: 90 → 92.67 → 95.33 → 98 …</code> — line ramp + tick/look advancing</td></tr>
+          <tr><td><code>cutoff: (line 90,130, steps:32).look</code></td><td><code>cutoff: 90 → 91.29 → 92.58 …</code> — independent 32-step ramp on the octave-2 voice</td></tr>
+          <tr><td>3 × <code>live_loop</code></td><td>drums→<code>out_bus 16</code>, synths→<code>18</code>, snare→<code>20</code> — concurrent, independent virtual-time periods</td></tr>
+        </tbody>
+      </table>
+
+      <p class="col-label" style="margin-top:18px">Event-log excerpt — one synth tick + its drums (verbatim)</p>
+      <pre class="code">[t:1.7240] /s_new <span class="str">"sonic-pi-mod_saw"</span>          {… cutoff: <span class="num">90</span>,      note: <span class="num">29</span>, out_bus: <span class="num">18</span>}  <span class="cmt"># note(:F, octave:1)</span>
+[t:1.7240] /s_new <span class="str">"sonic-pi-mod_saw"</span>          {… cutoff: <span class="num">90</span>,      note: <span class="num">41</span>, out_bus: <span class="num">18</span>}  <span class="cmt"># note(:F, octave:2) — polyphony</span>
+[t:1.7240] /s_new <span class="str">"sonic-pi-basic_mono_player"</span> {buf: <span class="num">0</span>, rate: <span class="num">0.8</span>,        out_bus: <span class="num">16</span>}  <span class="cmt"># :drum_heavy_kick — mono, centered</span>
+[t:1.7240] /s_new <span class="str">"sonic-pi-basic_mono_player"</span> {buf: <span class="num">1</span>,                   out_bus: <span class="num">20</span>}  <span class="cmt"># :drum_snare_soft — mono, centered</span>
+[t:2.2240] /s_new <span class="str">"sonic-pi-basic_mono_player"</span> {buf: <span class="num">0</span>, rate: <span class="num">0.8</span>,        out_bus: <span class="num">16</span>}  <span class="cmt"># slow-drum kick @ +0.5 beat</span>
+[t:2.7240] /s_new <span class="str">"sonic-pi-mod_saw"</span>          {… cutoff: <span class="num">92.67</span>,   note: <span class="num">24</span>, out_bus: <span class="num">18</span>}  <span class="cmt"># note(:C, octave:1), cutoff ramp .look</span></pre>
+      <div class="lede" style="margin-top:8px; font-size:12.5px">
+        Both samples now carry <code>basic_mono_player</code> (49 sample triggers in the 9&nbsp;s window, all mono-centered);
+        before the fix every one of them was left-channel-only. That is the SP107 fix doing its job inside the real composition.
       </div>
 
       <div class="footer-note">
