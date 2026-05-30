@@ -8,13 +8,13 @@
 
 | Row | raw sweep | gate verdict | graded via | detail |
 |---|---|---|---|---|
-| ✅ chord_inversions | inconcl | match | projection | tools/gate-reproducers/chord_inversions.rb → compare_2026-05-29T16-00-01-355Z_chord_inversions.md |
+| ✅ chord_inversions | match | match | projection | tools/gate-reproducers/chord_inversions.rb → compare_2026-05-29T16-00-01-355Z_chord_inversions.md |
 | ✅ reich_phase | match | match | raw-sweep |  |
 | ⚠️ dark_neon | inconcl | inconcl | documented-limitation | One sustained note (:cs1) + a sample texture, not a melody — Tier-1 pitch comparison is the wrong lens entirely. A reproducer would test a single note, which is not meaningful musical-correctness coverage. |
-| ✅ mod_303_phade | inconcl | match | raw-refreshed | re-measured → compare_2026-05-29T08-33-35-255Z_mod_303_phade.md |
+| ✅ mod_303_phade | inconcl | match | raw-refreshed | re-measured → compare_2026-05-30T19-32-34-562Z_mod_303_phade.md |
 | ⚠️ bach | inconcl | inconcl | documented-limitation | Sustained :beep polyphony — desktop onset detector finds ~3 onsets in 9s (#368); the web capture renders the full ~95s composition vs the windowed desktop capture (#406). No faithful gradeable projection: a monophonic literal-note list would test almost nothing (bach's substance is timing + concurrent in_thread alignment, exactly what's not onset-gradeable). |
 | ✅ driving_pulse | match | match | raw-sweep |  |
-| ✅ monday_blues | inconcl | match | projection | tools/gate-reproducers/monday_blues.rb → compare_2026-05-29T15-58-36-335Z_monday_blues.md · requires #409 note(octave:) fix (MERGED 8f38e2c) — without it web played +24 semitones; the projection itself surfaced this engine bug, SP106 |
+| ✅ monday_blues | match | match | projection | tools/gate-reproducers/monday_blues.rb → compare_2026-05-29T15-58-36-335Z_monday_blues.md · requires #409 note(octave:) fix (MERGED 8f38e2c) — without it web played +24 semitones; the projection itself surfaced this engine bug, SP106 |
 
 ## Excluded from denominator (SV49 — cross-engine PRNG is a v1 non-goal)
 - **ambient_experiment** — Uses choose([:D4,:E4]) etc. — PRNG-driven. Cross-engine PRNG parity is a declared v1 NON-GOAL (SV49), so it is excluded from the PRNG-free gate denominator (it belongs with the other ~22 PRNG rows). The post-SP104 framing wrongly counted it in the denom.

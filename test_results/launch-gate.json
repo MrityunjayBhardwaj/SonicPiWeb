@@ -8,7 +8,7 @@
   "rows": [
     {
       "example": "chord_inversions",
-      "rawVerdict": "inconcl",
+      "rawVerdict": "match",
       "gateVerdict": "match",
       "pass": true,
       "gradedVia": "projection",
@@ -36,7 +36,7 @@
       "gateVerdict": "match",
       "pass": true,
       "gradedVia": "raw-refreshed",
-      "detail": "re-measured → compare_2026-05-29T08-33-35-255Z_mod_303_phade.md"
+      "detail": "re-measured → compare_2026-05-30T19-32-34-562Z_mod_303_phade.md"
     },
     {
       "example": "bach",
@@ -56,7 +56,7 @@
     },
     {
       "example": "monday_blues",
-      "rawVerdict": "inconcl",
+      "rawVerdict": "match",
       "gateVerdict": "match",
       "pass": true,
       "gradedVia": "projection",

@@ -421,17 +421,42 @@ export async function runProgram(
           const fxGroupId = ctx.bridge.createFxGroup()
           let fxNodeId: number | undefined
           try {
-            const audioTime = task.virtualTime + ctx.schedAheadTime
+            // SP83/#423: create the FX node with an IMMEDIATE timetag (0), not
+            // the future `vt + schedAhead`. A future timetag puts the /s_new in
+            // the prescheduler's time-ordered queue; sibling FX in a nested
+            // chain (reverb→slicer) share that exact timetag because no sleep
+            // separates the with_fx entry from its body, and the WASM
+            // prescheduler does not guarantee FIFO for equal-timetag bundles
+            // under the bundle pressure a concurrent live_loop adds. The two FX
+            // /s_new then land in either tree order within group 101 — and
+            // `applyFxImmediate` uses addToHead, so a reversed processing order
+            // inverts the chain (reverb runs before slicer, reading an unwritten
+            // bus) → the whole node lifetime is silent (~20% of mod_303_phade
+            // runs; OSC byte-identical between good and silent runs — the race
+            // is purely scsynth-side ordering). Timetag 0/1 bypasses the
+            // prescheduler (`bypassImmediate`) → FIFO dispatch → the outer FX is
+            // instantiated before the inner, deterministically. This is exactly
+            // how preCreatePersistentFx (SV37) keeps loop-WRAPPING FX race-free;
+            // the inline `__run_once` path was the one create site still using a
+            // future timetag. The inner synth still plays at vt + schedAhead, so
+            // it lands after the (already-instantiated) FX chain.
+            //
+            // Drain any messages already queued THIS iteration (e.g. a `play`
+            // earlier in the same iteration with no intervening sleep) at THEIR
+            // own time first — the FX flush below uses timetag 0, and folding a
+            // pending future-timed /s_new into that immediate bundle would fire
+            // it early. No-op when the queue is empty (the mod_303 case).
+            ctx.bridge.flushMessages()
             const fxWarn = ctx.printHandler
               ? (m: string) => ctx.printHandler!(`[Warning] with_fx :${step.name} — ${m}`)
               : undefined
             const fxOpts = normalizeFxParams(step.name, step.opts, currentBpm, fxWarn)
-            fxNodeId = await ctx.bridge.applyFx(step.name, audioTime, fxOpts, newBus, prevOutBus)
+            fxNodeId = await ctx.bridge.applyFx(step.name, 0, fxOpts, newBus, prevOutBus)
             if (step.nodeRef && fxNodeId !== undefined) {
               ctx.nodeRefMap.set(step.nodeRef, fxNodeId)
             }
             task.outBus = newBus
-            ctx.bridge.flushMessages()
+            ctx.bridge.flushMessages(0)
             // Store for reuse — with pending kill timer as safety net.
             // aliveUntil starts at the current vt (no plays yet); `case 'play'`
             // bumps it as inner synths dispatch.

@@ -29,7 +29,6 @@
     <a href="e2e.html">E2E suite</a>
     <a href="community.html">community + forum</a>
     <a href="launch-gate.html" data-active="1">🚦 Launch Gate</a>
-    <a href="mono-sample-sp107.html" style="margin-left:auto">SP107 mono-sample fix →</a>
   </nav>
   <div class="wrap">
     <h1>Launch Gate — PRNG-free non-heavy official roster</h1>
@@ -38,13 +37,13 @@
     <table>
       <thead><tr><th>Row</th><th>Raw sweep</th><th>Gate verdict</th><th>Graded via</th><th>Detail</th></tr></thead>
       <tbody>
-        <tr class="pass"><td>✅ chord_inversions</td><td>inconcl</td><td><b>match</b></td><td>projection</td><td class="detail">tools/gate-reproducers/chord_inversions.rb → compare_2026-05-29T16-00-01-355Z_chord_inversions.md</td></tr>
+        <tr class="pass"><td>✅ chord_inversions</td><td>match</td><td><b>match</b></td><td>projection</td><td class="detail">tools/gate-reproducers/chord_inversions.rb → compare_2026-05-29T16-00-01-355Z_chord_inversions.md</td></tr>
         <tr class="pass"><td>✅ reich_phase</td><td>match</td><td><b>match</b></td><td>raw-sweep</td><td class="detail"></td></tr>
         <tr class="warn"><td>⚠️ dark_neon</td><td>inconcl</td><td><b>inconcl</b></td><td>documented-limitation</td><td class="detail">One sustained note (:cs1) + a sample texture, not a melody — Tier-1 pitch comparison is the wrong lens entirely. A reproducer would test a single note, which is not meaningful musical-correctness coverage.</td></tr>
-        <tr class="pass"><td>✅ mod_303_phade</td><td>inconcl</td><td><b>match</b></td><td>raw-refreshed</td><td class="detail">re-measured → compare_2026-05-29T08-33-35-255Z_mod_303_phade.md</td></tr>
+        <tr class="pass"><td>✅ mod_303_phade</td><td>inconcl</td><td><b>match</b></td><td>raw-refreshed</td><td class="detail">re-measured → compare_2026-05-30T19-32-34-562Z_mod_303_phade.md</td></tr>
         <tr class="warn"><td>⚠️ bach</td><td>inconcl</td><td><b>inconcl</b></td><td>documented-limitation</td><td class="detail">Sustained :beep polyphony — desktop onset detector finds ~3 onsets in 9s (#368); the web capture renders the full ~95s composition vs the windowed desktop capture (#406). No faithful gradeable projection: a monophonic literal-note list would test almost nothing (bach's substance is timing + concurrent in_thread alignment, exactly what's not onset-gradeable).</td></tr>
         <tr class="pass"><td>✅ driving_pulse</td><td>match</td><td><b>match</b></td><td>raw-sweep</td><td class="detail"></td></tr>
-        <tr class="pass"><td>✅ monday_blues</td><td>inconcl</td><td><b>match</b></td><td>projection</td><td class="detail">tools/gate-reproducers/monday_blues.rb → compare_2026-05-29T15-58-36-335Z_monday_blues.md · requires #409 note(octave:) fix (MERGED 8f38e2c) — without it web played +24 semitones; the projection itself surfaced this engine bug, SP106</td></tr>
+        <tr class="pass"><td>✅ monday_blues</td><td>match</td><td><b>match</b></td><td>projection</td><td class="detail">tools/gate-reproducers/monday_blues.rb → compare_2026-05-29T15-58-36-335Z_monday_blues.md · requires #409 note(octave:) fix (MERGED 8f38e2c) — without it web played +24 semitones; the projection itself surfaced this engine bug, SP106</td></tr>
       </tbody>
     </table>
     <h2 style="font-size:15px">Excluded from denominator <span class="detail">(SV49 — cross-engine PRNG is a v1 non-goal)</span></h2>
