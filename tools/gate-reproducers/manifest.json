@@ -48,22 +48,16 @@
       "reason": "One sustained note (:cs1) + a sample texture, not a melody — Tier-1 pitch comparison is the wrong lens entirely. A reproducer would test a single note, which is not meaningful musical-correctness coverage.",
       "engineEvidence": "No pitch-sequence to verify; the relevant engine paths (FX chain routing, sample playback) are covered by the FX-sweep / sample tooling, not Tier-1 pitch.",
       "countsAsPass": false
-    }
-  ],
-  "refreshed": [
+    },
     {
       "example": "mod_303_phade",
-      "reason": "examples-sweep.json is a 2026-05-28 snapshot predating the #403 (SP104 with_fx sustain) merge, where this row read INCONCL. Re-measured on current main (all fixes present) — now a genuine raw MATCH (not a projection).",
-      "evidence": {
-        "report": "compare_2026-05-29T08-33-35-255Z_mod_303_phade.md",
-        "verdict": "match",
-        "method": "onset/onset conf 1",
-        "desktop": "45,45,45,45,45,45,45,45,45,45,45,45,45",
-        "web": "45,45,45,45,45,45,45,45,45,45,45",
-        "note": "PITCH-MATCH over 11 notes; confirms PR #403"
-      }
+      "verdict": "diverge",
+      "reason": "REGRESSION-EXPOSED by SV55 (#419/#420), re-measured 2026-05-30 on merged main: web is now SILENT (peak 0.0000, RMS 0.0000) while desktop plays (peak 0.4564). Pre-SV55 the top-level use_synth :tb303 was dropped, web played :beep, and that accidentally produced a coincidental Tier-1 PITCH-MATCH (both ~36.7Hz, tracker read 45) — the stale 2026-05-29 'raw-refreshed MATCH' was that masked :beep. Post-SV55 web correctly plays :tb303 and the latent FX-bus silent-failure surfaces (#423). Does NOT count as pass — web produces no audio for this official example.",
+      "engineEvidence": "Isolation (Lokayata): tb303 plain=audible 0.256 · tb303+nested-FX (no loop)=audible 0.269 · tb303+live_loop+sync (no FX)=audible 0.256 · all three combined (real)=SILENT 0.000. Bug = trailing bare nested with_fx after a concurrent live_loop+sync routes FX output to an unmonitored bus (B2). Filed #423.",
+      "countsAsPass": false
     }
   ],
+  "refreshed": [],
   "exclusions": [
     {
       "example": "ambient_experiment",
