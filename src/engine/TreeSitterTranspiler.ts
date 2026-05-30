@@ -1091,15 +1091,25 @@ function transpileProgram(node: any, ctx: TranspileContext): string {
     const m = (c.type === 'call' || c.type === 'method_call')
       ? (c.childForFieldName('method')?.text ?? c.namedChildren[0]?.text)
       : null
-    // #419/SV55: emit an eager top-level `use_synth("X")` (→ topLevelUseSynth →
-    // defaultSynth) immediately before registration-capturing blocks so the
-    // loop registers with the source-order synth (SonicPiEngine.ts:879).
-    // Restricted to live_loop / auto-named bare loop — in_thread inheritance is
-    // owned by SP72's parentBuilder path (SV28), not the eager prefix. Skipped
-    // for non-literal args (tagged === null) and when the value is unchanged.
+    // #419/SV55 + #421: emit an eager top-level `use_synth("X")` (→
+    // topLevelUseSynth → defaultSynth) immediately before registration-
+    // capturing blocks so the loop registers with the source-order synth
+    // (SonicPiEngine.ts:879). Covers every block that registers a loop at
+    // depth 0 reading defaultSynth: live_loop, auto-named bare loop, top-level
+    // in_thread (topLevelInThread → fxAwareWrappedLiveLoop, same path), and
+    // with_fx whose inner live_loop registers synchronously inside the fx
+    // callback. NOT `use_synth` INSIDE an in_thread body (that mutates the
+    // in_thread builder and reaches nested loops via SP72's parentBuilder path,
+    // SV28) — only the top-level source-order synth is tracked in
+    // `currentTopSynth`. A with_fx node only reaches `blocks` when it contains a
+    // live_loop (else it is bareCode), so `m === 'with_fx'` here always wraps a
+    // registering loop. Skipped for non-literal args (tagged === null) and when
+    // the value is unchanged from the last eager emit.
     const tagged = blockSynth.get(c) ?? null
     let eagerPrefix = ''
-    if (tagged !== null && (m === 'live_loop' || m === 'loop') && tagged !== lastEagerSynth) {
+    if (tagged !== null &&
+        (m === 'live_loop' || m === 'loop' || m === 'in_thread' || m === 'with_fx') &&
+        tagged !== lastEagerSynth) {
       eagerPrefix = `use_synth(${JSON.stringify(tagged)})\n`
       lastEagerSynth = tagged
     }
