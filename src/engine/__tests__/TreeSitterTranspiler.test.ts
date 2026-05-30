@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest'
-import { initTreeSitter, treeSitterTranspile, isTreeSitterReady } from '../TreeSitterTranspiler'
+import { initTreeSitter, treeSitterTranspile, isTreeSitterReady, autoTranspile } from '../TreeSitterTranspiler'
 import { ProgramBuilder } from '../ProgramBuilder'
 import { ring } from '../Ring'
 import { spread } from '../EuclideanRhythm'
@@ -129,6 +129,160 @@ end`)
       expect(result.code).toContain('use_synth("prophet")')
       // Inside the loop, play gets b. prefix
       expect(result.code).toContain('b.play(60')
+    })
+
+    // #419 / SV55 — a top-level `use_synth :X` placed BEFORE a `live_loop`
+    // must make that loop register with synth :X, even when bare top-level
+    // code FOLLOWS the loop (which triggers the __run_once split and defers
+    // use_synth into the wrapper, leaving the loop to register with :beep).
+    // Desktop parity: in_thread/live_loop snapshots `current_synth` at its
+    // source position in sequential order (runtime.rb:1067). The transpiler
+    // restores this by emitting an EAGER top-level use_synth("X") (routes to
+    // topLevelUseSynth → defaultSynth) immediately before the loop registers.
+    describe('#419 / SV55: top-level use_synth honored by live_loop with trailing bare code', () => {
+      // Helper: index of an eager (no `__b.`/`b.` prefix) top-level call.
+      const eagerIdx = (code: string, call: string) => {
+        const re = new RegExp(`(^|[^.\\w])${call.replace(/[()]/g, '\\$&')}`, 'm')
+        const m = re.exec(code)
+        return m ? m.index : -1
+      }
+
+      it('T-A: emits eager use_synth("saw") before live_loop("s") (the bug)', () => {
+        const result = treeSitterTranspile(`use_synth :saw
+live_loop :s do
+  play :E3
+  sleep 1
+end
+sleep 5`)
+        expect(result.ok).toBe(true)
+        const loopIdx = result.code.indexOf('live_loop("s"')
+        const sawIdx = eagerIdx(result.code, 'use_synth("saw")')
+        expect(sawIdx).toBeGreaterThanOrEqual(0)
+        expect(loopIdx).toBeGreaterThanOrEqual(0)
+        // Eager (top-level) use_synth must precede the loop registration.
+        expect(sawIdx).toBeLessThan(loopIdx)
+      })
+
+      it('T-B: multi-loop — each loop prefixed with its source-order synth', () => {
+        const result = treeSitterTranspile(`use_synth :saw
+live_loop :a do
+  play 60
+  sleep 1
+end
+use_synth :tb303
+live_loop :b do
+  play 64
+  sleep 1
+end
+sleep 5`)
+        expect(result.ok).toBe(true)
+        const aIdx = result.code.indexOf('live_loop("a"')
+        const bIdx = result.code.indexOf('live_loop("b"')
+        const sawIdx = result.code.indexOf('use_synth("saw")\nlive_loop("a"')
+        const tbIdx = result.code.indexOf('use_synth("tb303")\nlive_loop("b"')
+        // saw prefixes loop a, tb303 prefixes loop b (in source order).
+        expect(sawIdx).toBeGreaterThanOrEqual(0)
+        expect(tbIdx).toBeGreaterThanOrEqual(0)
+        expect(sawIdx).toBeLessThan(aIdx)
+        expect(tbIdx).toBeLessThan(bIdx)
+        expect(aIdx).toBeLessThan(tbIdx)
+      })
+
+      it('T-C: loop BEFORE use_synth is NOT prefixed (snapshot is forward-only)', () => {
+        const result = treeSitterTranspile(`live_loop :a do
+  play 60
+  sleep 1
+end
+use_synth :saw
+sleep 5`)
+        expect(result.ok).toBe(true)
+        // No eager use_synth("saw") should precede live_loop("a").
+        expect(result.code).not.toContain('use_synth("saw")\nlive_loop("a"')
+        const loopIdx = result.code.indexOf('live_loop("a"')
+        const sawEager = eagerIdx(result.code, 'use_synth("saw")')
+        // Either no eager use_synth at all, or it comes AFTER the loop.
+        expect(sawEager === -1 || sawEager > loopIdx).toBe(true)
+      })
+
+      it('T-D: non-literal use_synth arg → no eager prefix, no crash', () => {
+        const result = treeSitterTranspile(`use_synth foo
+live_loop :a do
+  play 60
+  sleep 1
+end
+sleep 5`)
+        expect(result.ok).toBe(true)
+        // foo is not a literal symbol/string — cannot resolve at build time.
+        expect(result.code).not.toContain('use_synth("foo")')
+        expect(result.code).not.toContain('use_synth(foo)\nlive_loop("a"')
+        // Output must still be valid JS.
+        expect(() => new Function(result.code)).not.toThrow()
+      })
+
+      it('T-E (engine): live_loop registers with currentSynth = source-order synth', () => {
+        const code = autoTranspile(`use_synth :saw
+live_loop :s do
+  play :E3
+  sleep 1
+end
+sleep 5`)
+        // Minimal harness mirroring SonicPiEngine: live_loop reads the synth
+        // in effect (defaultSynth) at registration time (SonicPiEngine.ts:879).
+        const registrations: Record<string, string> = {}
+        let defaultSynth = 'beep'
+        const use_synth = (name: string) => { defaultSynth = name }
+        const use_bpm = (_n: number) => {}
+        const live_loop = (name: string, _fn: unknown) => {
+          // Capture synth at registration — do NOT invoke the body (the real
+          // builderFn runs per-iteration, not at registration).
+          registrations[name] = defaultSynth
+        }
+        const fn = new Function('use_synth', 'use_bpm', 'live_loop',
+          `return (async () => {\n${code}\n})();`)
+        return fn(use_synth, use_bpm, live_loop).then(() => {
+          expect(registrations['s']).toBe('saw')
+        })
+      })
+
+      it('T-F (regression SP36/#164): bare-play interleave preserved inside __run_once', () => {
+        const result = treeSitterTranspile(`use_synth :saw
+play 60
+use_synth :beep
+play 64
+sleep 1`)
+        expect(result.ok).toBe(true)
+        // No live_loop blocks here → no eager hoist; both use_synth stay
+        // inline (as __b.use_synth) in source order inside __run_once.
+        const code = result.code
+        const s1 = code.indexOf('__b.use_synth("saw")')
+        const p1 = code.indexOf('__b.play(60')
+        const s2 = code.indexOf('__b.use_synth("beep")')
+        const p2 = code.indexOf('__b.play(64')
+        expect(s1).toBeGreaterThanOrEqual(0)
+        expect(s1).toBeLessThan(p1)
+        expect(p1).toBeLessThan(s2)
+        expect(s2).toBeLessThan(p2)
+        // And no eager top-level use_synth hoisted above the wrapper.
+        const wrapperStart = code.indexOf('live_loop("__run_once"')
+        expect(eagerIdx(code.slice(0, wrapperStart), 'use_synth(')).toBe(-1)
+      })
+
+      it('T-G (regression SP72): use_synth inside in_thread does NOT leak to eager top-level', () => {
+        const result = treeSitterTranspile(`in_thread do
+  use_synth :tb303
+  live_loop :inner do
+    play 60
+    sleep 1
+  end
+end
+sleep 5`)
+        expect(result.ok).toBe(true)
+        // use_synth is inside the in_thread body (emitted as __b.use_synth),
+        // not top-level → no EAGER top-level use_synth("tb303") emitted (the
+        // SP72 parentBuilder path owns this inheritance, not the eager prefix).
+        const eagerTb = eagerIdx(result.code, 'use_synth("tb303")')
+        expect(eagerTb).toBe(-1)
+      })
     })
 
     // Regression for #163 — `synth :NAME, note: 60` used to transpile to
