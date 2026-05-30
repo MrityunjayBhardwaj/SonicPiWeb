@@ -155,6 +155,11 @@ export const DSL_NAMES = [
   'set_mixer_control', 'reset_mixer',
   'scsynth_info', 'status',
   'vt', 'bt', 'rt',
+  // #421/SV55 — top-level use_transpose / use_synth_defaults. Bound so the
+  // transpiler's eager source-order prefix (emitted before a loop registration
+  // to carry the setting into the loop's task) resolves at top level. Inside
+  // live_loops these still route through __b (BARE_DSL_CALLS), unchanged.
+  'use_transpose', 'use_synth_defaults',
 ] as const
 
 export type DslName = typeof DSL_NAMES[number]

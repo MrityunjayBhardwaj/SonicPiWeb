@@ -480,17 +480,26 @@ export class SonicPiEngine {
       // Top-level DSL state
       let defaultBpm = 60
       let defaultSynth = 'beep'
+      // #421/SV55: top-level transpose / synth_defaults — read into each loop's
+      // task at registration (mirrors defaultSynth). Desktop snapshots both
+      // thread-locals at fork (runtime.rb:1067; sound.rb:1481-1484, :4139).
+      let defaultTranspose = 0
+      let defaultSynthDefaults: Record<string, number> = {}
       const scheduler = this.scheduler!
 
       const topLevelUseBpm = (bpm: number) => { defaultBpm = bpm }
       const topLevelUseSynth = (name: string) => { defaultSynth = name }
+      const topLevelUseTranspose = (semitones: number) => { defaultTranspose = semitones }
+      // use_synth_defaults REPLACES prior defaults (desktop sound.rb:1481-1484);
+      // use_merged_synth_defaults is the merge form, handled separately.
+      const topLevelUseSynthDefaults = (opts: Record<string, number>) => { defaultSynthDefaults = { ...opts } }
       // Top-level use_arg_bpm_scaling — no-op at top level (inside live_loops, b.use_arg_bpm_scaling handles it)
       const topLevelUseArgBpmScaling = (_enabled: boolean) => { /* no-op */ }
       const topLevelWithArgBpmScaling = (_enabled: boolean, fn: () => void) => { fn() }
 
       // Collection map for re-evaluate hot-swap path
       const pendingLoops = new Map<string, () => Promise<void>>()
-      const pendingDefaults = new Map<string, { bpm: number; synth: string }>()
+      const pendingDefaults = new Map<string, { bpm: number; synth: string; transpose: number; synthDefaults: Record<string, number> }>()
 
       // Top-level set_volume! — Desktop SP range is 0-5, maps to mixer pre_amp.
       // currentVolume is captured by closures (set_volume + current_volume_fn +
@@ -780,6 +789,14 @@ export class SonicPiEngine {
           if (task.currentSynth && task.currentSynth !== 'beep') {
             builder.use_synth(task.currentSynth)
           }
+          // #421/SV55: seed transpose / synth_defaults inherited at registration
+          // (mirrors use_synth). Re-seeded each iteration from the inherited
+          // value; a use_transpose/use_synth_defaults inside the body overrides
+          // for that iteration, matching desktop's per-iteration fork-snapshot.
+          if (task.transpose) builder.use_transpose(task.transpose)
+          if (task.synthDefaults && Object.keys(task.synthDefaults).length > 0) {
+            builder.use_synth_defaults(task.synthDefaults)
+          }
           // Seed introspection state for current_time / current_beat (#226).
           // task.virtualTime is the iteration-start audio time (advances on sleep).
           // loopBeats persists current_beat across iterations like loopTicks does.
@@ -874,10 +891,13 @@ export class SonicPiEngine {
         // from top-level use_bpm/use_synth). Read from the parent builder if
         // we have one, else fall back to engine defaults.
         const parentBuilder = this.currentBuildBuilder
-        const inheritedBpm = (this.buildNestingDepth > 0 && parentBuilder)
-          ? parentBuilder.currentBpm : defaultBpm
-        const inheritedSynth = (this.buildNestingDepth > 0 && parentBuilder)
-          ? parentBuilder.currentDefaultSynth : defaultSynth
+        const nestedFromParent = this.buildNestingDepth > 0 && parentBuilder
+        const inheritedBpm = nestedFromParent ? parentBuilder.currentBpm : defaultBpm
+        const inheritedSynth = nestedFromParent ? parentBuilder.currentDefaultSynth : defaultSynth
+        // #421/SV55: transpose / synth_defaults follow the same inheritance as
+        // synth — parent builder when nested (SP72/SV28), engine default at top.
+        const inheritedTranspose = nestedFromParent ? parentBuilder.currentTranspose : defaultTranspose
+        const inheritedSynthDefaults = nestedFromParent ? parentBuilder.currentSynthDefaultsMap : defaultSynthDefaults
 
         if (this.buildNestingDepth > 0 && isReEvaluate) {
           // Nested hot-swap (issue #199): this call is firing from inside an
@@ -896,26 +916,36 @@ export class SonicPiEngine {
             // SP72: nested hot-swap inherits from parent builder, not defaults.
             existing.bpm = inheritedBpm
             existing.currentSynth = inheritedSynth
+            existing.transpose = inheritedTranspose
+            existing.synthDefaults = inheritedSynthDefaults
             existing.outBus = loopBus
           } else {
             // New inner declared during hot-swap (e.g. user added it on Run).
-            scheduler.registerLoop(name, asyncFn, { bpm: inheritedBpm, synth: inheritedSynth })
+            scheduler.registerLoop(name, asyncFn, {
+              bpm: inheritedBpm, synth: inheritedSynth,
+              transpose: inheritedTranspose, synthDefaults: inheritedSynthDefaults,
+            })
             const task = scheduler.getTask(name)
             if (task) task.outBus = loopBus
           }
         } else if (isReEvaluate) {
           pendingLoops.set(name, asyncFn)
-          pendingDefaults.set(name, { bpm: defaultBpm, synth: defaultSynth })
+          pendingDefaults.set(name, {
+            bpm: defaultBpm, synth: defaultSynth,
+            transpose: inheritedTranspose, synthDefaults: inheritedSynthDefaults,
+          })
         } else {
           scheduler.registerLoop(name, asyncFn)
           const task = scheduler.getTask(name)
           if (task) {
-            // SP72: nested initial registration inherits parent builder's bpm
-            // and synth (set by `b.use_bpm`/`b.use_synth` inside the parent's
-            // builderFn body). Top-level registrations (depth=0) use the
+            // SP72: nested initial registration inherits parent builder's bpm,
+            // synth, transpose and synth_defaults (set by `b.use_*` inside the
+            // parent's builderFn body). Top-level registrations (depth=0) use the
             // engine-level defaults — unchanged from prior behavior.
             task.bpm = inheritedBpm
             task.currentSynth = inheritedSynth
+            task.transpose = inheritedTranspose
+            task.synthDefaults = inheritedSynthDefaults
             task.outBus = loopBus
           }
         }
@@ -1537,6 +1567,12 @@ export class SonicPiEngine {
         () => scheduler.audioTime - this._spiderTimeOrigin,          // vt: thread's local virtual run time (rebased)
         (t: number) => t * 60 / defaultBpm,                          // bt: beats → seconds at current bpm
         (t: number) => t * defaultBpm / 60,                          // rt: seconds → beats (bypasses bpm scaling)
+        // #421/SV55 — top-level use_transpose / use_synth_defaults set the
+        // engine defaults read into each loop's task at registration (mirrors
+        // topLevelUseSynth). The transpiler emits these as an eager source-order
+        // prefix before each loop-registering block.
+        topLevelUseTranspose,
+        topLevelUseSynthDefaults,
       ]
 
       const codeWarnings = validateCode(transpiledCode)
@@ -1701,6 +1737,8 @@ export class SonicPiEngine {
           if (task) {
             task.bpm = defaults.bpm
             task.currentSynth = defaults.synth
+            task.transpose = defaults.transpose
+            task.synthDefaults = defaults.synthDefaults
             task.outBus = this.bridge?.getLoopBus(name) ?? 0
           }
         }
@@ -2074,6 +2112,12 @@ export class SonicPiEngine {
               // Apply the loop's synth default so QueryInterpreter shows the correct synth
               if (task?.currentSynth && task.currentSynth !== 'beep') {
                 builder.use_synth(task.currentSynth)
+              }
+              // #421/SV55: seed transpose / synth_defaults so the query view
+              // matches the audio path (same as the live builder seeding above).
+              if (task?.transpose) builder.use_transpose(task.transpose)
+              if (task?.synthDefaults && Object.keys(task.synthDefaults).length > 0) {
+                builder.use_synth_defaults(task.synthDefaults)
               }
               builderFn(builder)
               return { program: builder.build(), ticks: builder.getTicks() }

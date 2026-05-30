@@ -194,6 +194,12 @@ export class ProgramBuilder {
    *  synth, not the engine-level `defaultSynth`. */
   get currentDefaultSynth(): string { return this.currentSynth }
 
+  /** #421/SV55: parent's in-flight transpose / synth_defaults — nested loop
+   *  registrations inherit these from the parent builder (desktop fork-snapshot
+   *  parity, runtime.rb:1067), mirroring `currentDefaultSynth` for `use_synth`. */
+  get currentTranspose(): number { return this._transpose }
+  get currentSynthDefaultsMap(): Record<string, number> { return { ...this._synthDefaults } }
+
   /** Set BPM to match a sample's natural tempo. */
   use_sample_bpm(name: string, opts?: Record<string, unknown>): this {
     const dur = this.sample_duration(name, opts)
