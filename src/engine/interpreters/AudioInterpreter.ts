@@ -440,6 +440,13 @@ export async function runProgram(
             // the inline `__run_once` path was the one create site still using a
             // future timetag. The inner synth still plays at vt + schedAhead, so
             // it lands after the (already-instantiated) FX chain.
+            //
+            // Drain any messages already queued THIS iteration (e.g. a `play`
+            // earlier in the same iteration with no intervening sleep) at THEIR
+            // own time first — the FX flush below uses timetag 0, and folding a
+            // pending future-timed /s_new into that immediate bundle would fire
+            // it early. No-op when the queue is empty (the mod_303 case).
+            ctx.bridge.flushMessages()
             const fxWarn = ctx.printHandler
               ? (m: string) => ctx.printHandler!(`[Warning] with_fx :${step.name} — ${m}`)
               : undefined
