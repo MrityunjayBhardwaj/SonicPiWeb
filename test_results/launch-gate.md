@@ -1,6 +1,6 @@
 # Launch Gate — PRNG-free non-heavy official roster
 
-**4/7 = 57.1%** · threshold ≥70% · **❌ NOT MET**
+**5/7 = 71.4%** · threshold ≥70% · **✅ PASS**
 
 > Pass = MATCH or PRNG-VARIANT. Rows the pitch-trackers cannot grade are graded via an instrument-friendly projection that exercises the same engine logic (see `tools/gate-reproducers/`). The raw sweep keeps the unvarnished verdicts; this is the launch-gate computation.
 
@@ -11,7 +11,7 @@
 | ✅ chord_inversions | match | match | projection | tools/gate-reproducers/chord_inversions.rb → compare_2026-05-29T16-00-01-355Z_chord_inversions.md |
 | ✅ reich_phase | match | match | raw-sweep |  |
 | ⚠️ dark_neon | inconcl | inconcl | documented-limitation | One sustained note (:cs1) + a sample texture, not a melody — Tier-1 pitch comparison is the wrong lens entirely. A reproducer would test a single note, which is not meaningful musical-correctness coverage. |
-| ❌ mod_303_phade | inconcl | diverge | documented-limitation | REGRESSION-EXPOSED by SV55 (#419/#420), re-measured 2026-05-30 on merged main: web is now SILENT (peak 0.0000, RMS 0.0000) while desktop plays (peak 0.4564). Pre-SV55 the top-level use_synth :tb303 was dropped, web played :beep, and that accidentally produced a coincidental Tier-1 PITCH-MATCH (both ~36.7Hz, tracker read 45) — the stale 2026-05-29 'raw-refreshed MATCH' was that masked :beep. Post-SV55 web correctly plays :tb303 and the latent FX-bus silent-failure surfaces (#423). Does NOT count as pass — web produces no audio for this official example. |
+| ✅ mod_303_phade | inconcl | match | raw-refreshed | re-measured → compare_2026-05-30T19-32-34-562Z_mod_303_phade.md |
 | ⚠️ bach | inconcl | inconcl | documented-limitation | Sustained :beep polyphony — desktop onset detector finds ~3 onsets in 9s (#368); the web capture renders the full ~95s composition vs the windowed desktop capture (#406). No faithful gradeable projection: a monophonic literal-note list would test almost nothing (bach's substance is timing + concurrent in_thread alignment, exactly what's not onset-gradeable). |
 | ✅ driving_pulse | match | match | raw-sweep |  |
 | ✅ monday_blues | match | match | projection | tools/gate-reproducers/monday_blues.rb → compare_2026-05-29T15-58-36-335Z_monday_blues.md · requires #409 note(octave:) fix (MERGED 8f38e2c) — without it web played +24 semitones; the projection itself surfaced this engine bug, SP106 |

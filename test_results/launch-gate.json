@@ -1,10 +1,10 @@
 {
   "generatedFrom": "examples-sweep.json + tools/gate-reproducers/manifest.json",
   "denominator": 7,
-  "passCount": 4,
-  "pct": 57.1,
+  "passCount": 5,
+  "pct": 71.4,
   "thresholdPct": 70,
-  "passed": false,
+  "passed": true,
   "rows": [
     {
       "example": "chord_inversions",
@@ -33,10 +33,10 @@
     {
       "example": "mod_303_phade",
       "rawVerdict": "inconcl",
-      "gateVerdict": "diverge",
-      "pass": false,
-      "gradedVia": "documented-limitation",
-      "detail": "REGRESSION-EXPOSED by SV55 (#419/#420), re-measured 2026-05-30 on merged main: web is now SILENT (peak 0.0000, RMS 0.0000) while desktop plays (peak 0.4564). Pre-SV55 the top-level use_synth :tb303 was dropped, web played :beep, and that accidentally produced a coincidental Tier-1 PITCH-MATCH (both ~36.7Hz, tracker read 45) — the stale 2026-05-29 'raw-refreshed MATCH' was that masked :beep. Post-SV55 web correctly plays :tb303 and the latent FX-bus silent-failure surfaces (#423). Does NOT count as pass — web produces no audio for this official example."
+      "gateVerdict": "match",
+      "pass": true,
+      "gradedVia": "raw-refreshed",
+      "detail": "re-measured → compare_2026-05-30T19-32-34-562Z_mod_303_phade.md"
     },
     {
       "example": "bach",
