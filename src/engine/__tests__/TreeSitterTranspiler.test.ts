@@ -321,6 +321,57 @@ sleep 5`)
         expect(itIdx).toBeGreaterThanOrEqual(0)
         expect(synthIdx).toBeLessThan(itIdx)
       })
+
+      // #421 — the same fork-snapshot semantics apply to use_transpose and
+      // use_synth_defaults (desktop: both are thread-locals snapshotted at fork,
+      // sound.rb:1481-1484 / :4139, runtime.rb:1067). A top-level use_transpose /
+      // use_synth_defaults before a loop must reach the loop's registration via
+      // an eager top-level prefix (→ topLevelUseTranspose / topLevelUseSynthDefaults).
+      it('T-J (#421): top-level use_transpose prefixes the loop registration', () => {
+        const result = treeSitterTranspile(`use_transpose 7
+live_loop :s do
+  play 60
+  sleep 1
+end
+sleep 5`)
+        expect(result.ok).toBe(true)
+        const loopIdx = result.code.indexOf('live_loop("s"')
+        const tIdx = eagerIdx(result.code, 'use_transpose(7)')
+        expect(tIdx).toBeGreaterThanOrEqual(0)
+        expect(loopIdx).toBeGreaterThanOrEqual(0)
+        expect(tIdx).toBeLessThan(loopIdx)
+      })
+
+      it('T-K (#421): top-level use_synth_defaults prefixes the loop registration', () => {
+        const result = treeSitterTranspile(`use_synth_defaults amp: 0.5, cutoff: 80
+live_loop :s do
+  play 60
+  sleep 1
+end
+sleep 5`)
+        expect(result.ok).toBe(true)
+        const loopIdx = result.code.indexOf('live_loop("s"')
+        const dIdx = eagerIdx(result.code, 'use_synth_defaults(')
+        expect(dIdx).toBeGreaterThanOrEqual(0)
+        expect(dIdx).toBeLessThan(loopIdx)
+        // The eager prefix carries the literal opts.
+        const prefix = result.code.slice(dIdx, loopIdx)
+        expect(prefix).toMatch(/amp:\s*0\.5/)
+        expect(prefix).toMatch(/cutoff:\s*80/)
+      })
+
+      it('T-L (#421): use_transpose AFTER the loop does NOT prefix it (forward-only)', () => {
+        const result = treeSitterTranspile(`live_loop :s do
+  play 60
+  sleep 1
+end
+use_transpose 7
+sleep 5`)
+        expect(result.ok).toBe(true)
+        const loopIdx = result.code.indexOf('live_loop("s"')
+        const tIdx = eagerIdx(result.code, 'use_transpose(7)')
+        expect(tIdx === -1 || tIdx > loopIdx).toBe(true)
+      })
     })
 
     // Regression for #163 — `synth :NAME, note: 60` used to transpile to
