@@ -944,6 +944,19 @@ const BARE_DSL_CALLS = new Set([
 // collapse all plays to the last use_synth value (#164).
 const TOP_LEVEL_SETTINGS = new Set(['use_bpm', 'use_random_seed', 'use_debug', 'use_arg_bpm_scaling'])
 
+// #419/SV55: extract a literal synth name from a `use_synth :X` / `use_synth "X"`
+// call. Returns the bare name for a literal symbol/string arg, or null for a
+// non-literal (runtime expression) arg — in which case the synth cannot be
+// known at build time and NO eager prefix may be emitted (do not guess).
+function extractLiteralSynthArg(callNode: any): string | null {
+  const argsNode = callNode.childForFieldName('arguments')
+  const argNode = argsNode?.namedChildren?.[0]
+  if (!argNode) return null
+  if (argNode.type === 'simple_symbol') return argNode.text.slice(1)
+  if (argNode.type === 'string') return argNode.text.replace(/['"]/g, '')
+  return null
+}
+
 function transpileProgram(node: any, ctx: TranspileContext): string {
   const children = node.namedChildren
 
@@ -988,6 +1001,14 @@ function transpileProgram(node: any, ctx: TranspileContext): string {
   const bareCode: any[] = []
   const blocks: any[] = []
 
+  // #419/SV55: track the top-level `use_synth` in SOURCE ORDER so each block
+  // inherits the synth in effect at its definition point (desktop fork-snapshot
+  // parity, runtime.rb:1067). `blockSynth` tags each registration-capturing
+  // block with the synth that was current when it appeared. use_synth still
+  // flows to bareCode (deferred) for bare-play interleave — this only records.
+  let currentTopSynth: string | null = null
+  const blockSynth = new Map<any, string | null>()
+
   for (const child of children) {
     if (child.type === 'comment') {
       bareCode.push(child)
@@ -996,6 +1017,12 @@ function transpileProgram(node: any, ctx: TranspileContext): string {
     const method = (child.type === 'call' || child.type === 'method_call')
       ? (child.childForFieldName('method')?.text ?? child.namedChildren[0]?.text)
       : null
+
+    // #419/SV55: a top-level `use_synth` advances the source-order synth. A
+    // non-literal arg yields null (unknowable at build time → no eager prefix).
+    if (method === 'use_synth') {
+      currentTopSynth = extractLiteralSynthArg(child)
+    }
 
     // Bare with_fx (no live_loop inside) should be treated as bare code, not a block
     const isBareFxNode = method === 'with_fx' && !/live_loop/.test(child.text ?? '')
@@ -1014,6 +1041,7 @@ function transpileProgram(node: any, ctx: TranspileContext): string {
     } else if (method && !isBareFxNode && (method === 'live_loop' || method === 'define' || method === 'ndefine' || method === 'defonce' || method === 'with_fx' ||
                           method === 'in_thread' || isBareLoopNode)) {
       blocks.push(child)
+      blockSynth.set(child, currentTopSynth)
     } else {
       bareCode.push(child)
     }
@@ -1055,20 +1083,36 @@ function transpileProgram(node: any, ctx: TranspileContext): string {
   // (SV16 — bare code runs once, not forever; `loop do` is its own forever
   // live_loop, not fall-through-to-`__run_once` bare code).
   let topLoopCounter = 0
+  // #419/SV55: tracks the last EAGER use_synth value emitted, so a run of
+  // loops sharing the same source-order synth emits the prefix only once
+  // (defaultSynth persists across registrations at runtime).
+  let lastEagerSynth: string | null = null
   const blockJS = blocks.map(c => {
     const m = (c.type === 'call' || c.type === 'method_call')
       ? (c.childForFieldName('method')?.text ?? c.namedChildren[0]?.text)
       : null
+    // #419/SV55: emit an eager top-level `use_synth("X")` (→ topLevelUseSynth →
+    // defaultSynth) immediately before registration-capturing blocks so the
+    // loop registers with the source-order synth (SonicPiEngine.ts:879).
+    // Restricted to live_loop / auto-named bare loop — in_thread inheritance is
+    // owned by SP72's parentBuilder path (SV28), not the eager prefix. Skipped
+    // for non-literal args (tagged === null) and when the value is unchanged.
+    const tagged = blockSynth.get(c) ?? null
+    let eagerPrefix = ''
+    if (tagged !== null && (m === 'live_loop' || m === 'loop') && tagged !== lastEagerSynth) {
+      eagerPrefix = `use_synth(${JSON.stringify(tagged)})\n`
+      lastEagerSynth = tagged
+    }
     if (m === 'loop') {
       const body = c.namedChildren.find((x: any) => x.type === 'do_block' || x.type === 'block')
       if (body) {
         const bodyCtx: TranspileContext = { ...ctx, insideLoop: true, asyncBody: true }
         const bodyStr = transpileBlockBody(body, bodyCtx)
         const name = `__loop_${topLoopCounter++}`
-        return `live_loop("${name}", async (__b) => {\n${bodyStr}\n${ctx.indent}})`
+        return `${eagerPrefix}live_loop("${name}", async (__b) => {\n${bodyStr}\n${ctx.indent}})`
       }
     }
-    return transpileNode(c, ctx)
+    return eagerPrefix + transpileNode(c, ctx)
   }).filter(Boolean)
 
   const parts: string[] = []
