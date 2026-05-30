@@ -77,6 +77,6 @@
   "homepage": "https://sonicpi.cc",
   "license": "MIT",
   "dependencies": {
-    "web-tree-sitter": "^0.24.3"
+    "web-tree-sitter": "^0.26.9"
   }
 }
