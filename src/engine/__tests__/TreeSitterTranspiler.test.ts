@@ -283,6 +283,44 @@ sleep 5`)
         const eagerTb = eagerIdx(result.code, 'use_synth("tb303")')
         expect(eagerTb).toBe(-1)
       })
+
+      // #421 — extend the source-order snapshot to the remaining same-class
+      // blocks that register at depth 0 reading defaultSynth: with_fx-wrapped
+      // live_loops (echo_drama) and top-level in_thread (topLevelInThread →
+      // fxAwareWrappedLiveLoop, same registration path as live_loop).
+      it('T-H (#421): with_fx-wrapped live_loop is prefixed with source-order synth', () => {
+        const result = treeSitterTranspile(`use_synth :tb303
+with_fx :reverb do
+  live_loop :s do
+    play 60
+    sleep 1
+  end
+end
+sleep 5`)
+        expect(result.ok).toBe(true)
+        const fxIdx = result.code.indexOf('with_fx("reverb"')
+        const synthIdx = eagerIdx(result.code, 'use_synth("tb303")')
+        expect(synthIdx).toBeGreaterThanOrEqual(0)
+        expect(fxIdx).toBeGreaterThanOrEqual(0)
+        // Eager use_synth must precede the with_fx block (whose inner live_loop
+        // registers synchronously at depth 0, reading defaultSynth).
+        expect(synthIdx).toBeLessThan(fxIdx)
+      })
+
+      it('T-I (#421): top-level in_thread is prefixed with source-order synth', () => {
+        const result = treeSitterTranspile(`use_synth :saw
+in_thread do
+  play 60
+  sleep 1
+end
+sleep 5`)
+        expect(result.ok).toBe(true)
+        const itIdx = result.code.indexOf('in_thread(')
+        const synthIdx = eagerIdx(result.code, 'use_synth("saw")')
+        expect(synthIdx).toBeGreaterThanOrEqual(0)
+        expect(itIdx).toBeGreaterThanOrEqual(0)
+        expect(synthIdx).toBeLessThan(itIdx)
+      })
     })
 
     // Regression for #163 — `synth :NAME, note: 60` used to transpile to
