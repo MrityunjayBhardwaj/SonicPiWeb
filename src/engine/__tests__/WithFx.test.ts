@@ -28,6 +28,15 @@ function createMockBridge(): SuperSonicBridge & { calls: string[] } {
       calls.push(`fx:${name}:in${inBus}:out${outBus}`)
       return id
     },
+    // #424: the inline with_fx CREATE branch now accumulates FX via
+    // applyFxOrdered (one ordered immediate bundle) instead of applyFx +
+    // flushMessages(0). Record identically so the bus-wiring assertions hold.
+    async applyFxOrdered(name: string, params: Record<string, number>, inBus: number, outBus: number) {
+      const id = nextNode++
+      calls.push(`fx:${name}:in${inBus}:out${outBus}`)
+      return id
+    },
+    flushImmediateFx() { calls.push('flushFx') },
     freeNode(id: number) { calls.push(`freeNode:${id}`) },
     createFxGroup() { const g = nextNode++; calls.push(`createGroup:${g}`); return g },
     freeGroup(id: number) { calls.push(`freeGroup:${id}`) },

@@ -443,20 +443,29 @@ export async function runProgram(
             //
             // Drain any messages already queued THIS iteration (e.g. a `play`
             // earlier in the same iteration with no intervening sleep) at THEIR
-            // own time first — the FX flush below uses timetag 0, and folding a
-            // pending future-timed /s_new into that immediate bundle would fire
-            // it early. No-op when the queue is empty (the mod_303 case).
+            // own time first — keeps that future-timed /s_new out of the FX
+            // bundle. No-op when the queue is empty (the mod_303 case).
             ctx.bridge.flushMessages()
             const fxWarn = ctx.printHandler
               ? (m: string) => ctx.printHandler!(`[Warning] with_fx :${step.name} — ${m}`)
               : undefined
             const fxOpts = normalizeFxParams(step.name, step.opts, currentBpm, fxWarn)
-            fxNodeId = await ctx.bridge.applyFx(step.name, 0, fxOpts, newBus, prevOutBus)
+            // #424: accumulate this FX into the ordered immediate-FX bundle
+            // (applyFxOrdered) rather than flushing it as its own timetag-0
+            // bundle. The whole nested chain (outer reverb → inner slicer) is
+            // emitted as ONE bundle when the inner synth is queued (or by the
+            // finally below). scsynth runs a bundle's messages in array order,
+            // so outer-before-inner is deterministic — the scsynth-side
+            // same-timetag /s_new reorder that left the chain reversed (reverb
+            // at the head of group 101) and silent ~6% of runs cannot occur.
+            // The inner synth still plays at vt+schedAhead, landing after the
+            // (already-instantiated) FX chain. Replaces the #423 per-FX
+            // flushMessages(0), whose two separate timetag-0 bundles raced.
+            fxNodeId = await ctx.bridge.applyFxOrdered(step.name, fxOpts, newBus, prevOutBus)
             if (step.nodeRef && fxNodeId !== undefined) {
               ctx.nodeRefMap.set(step.nodeRef, fxNodeId)
             }
             task.outBus = newBus
-            ctx.bridge.flushMessages(0)
             // Store for reuse — with pending kill timer as safety net.
             // aliveUntil starts at the current vt (no plays yet); `case 'play'`
             // bumps it as inner synths dispatch.
@@ -476,6 +485,11 @@ export async function runProgram(
             }
           } finally {
             task.outBus = prevOutBus
+            // #424: emit any FX still pending in the ordered immediate-FX bundle
+            // (e.g. an FX block with no inner synth, so no queueMessage fired the
+            // flush). By here the full chain is accumulated, so this still sends
+            // one ordered bundle. No-op once an inner synth already flushed it.
+            ctx.bridge.flushImmediateFx()
             ctx.bridge.flushMessages()
             // Schedule kill in VIRTUAL TIME (SV41) — if next iter reuses, cancelled.
             // killAt = max(vt_at_block_exit, aliveUntil) + killDelay — see reuse branch.

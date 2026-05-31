@@ -202,6 +202,17 @@ export class SuperSonicBridge {
    */
   private messageQueue: Array<{ address: string; args: (string | number)[] }> = []
   private messageQueueAudioTime: number = 0
+  /**
+   * #424: immediate-FX bundle accumulator. Nested `with_fx` FX `/s_new` collect
+   * here (via applyFxOrdered) and are emitted as ONE timetag-0 OSC bundle by
+   * flushImmediateFx() — scsynth executes a bundle's messages in array order,
+   * so the chain instantiates outer-before-inner DETERMINISTICALLY. This
+   * eliminates the scsynth-side same-timetag /s_new reorder that left the chain
+   * reversed (reverb at the head of group 101) and silent ~6% of runs (SP109
+   * residual). Kept separate from messageQueue (future-time plays/samples) so
+   * the immediate FX bundle and the future synth bundle never fold together.
+   */
+  private immediateFxQueue: Array<{ address: string; args: (string | number)[] }> = []
 
   constructor(options: SuperSonicBridgeOptions = {}) {
     this.options = options
@@ -505,6 +516,14 @@ export class SuperSonicBridge {
     address: string,
     args: (string | number)[],
   ): void {
+    // #424: a synth/sample/control is about to be queued — it must find the
+    // pending FX chain already instantiated in scsynth. Emit the accumulated
+    // immediate-FX bundle (one ordered timetag-0 bundle) first. No-op unless a
+    // nested with_fx chain is mid-creation (applyFxOrdered). The immediate FX
+    // (past timetag → dispatched now) always reaches scsynth before this
+    // future-timed message regardless of send order, so the chain exists by
+    // the time the note sounds.
+    if (this.immediateFxQueue.length > 0) this.flushImmediateFx()
     this.messageQueueAudioTime = audioTime
     this.messageQueue.push({ address, args })
 
@@ -937,17 +956,21 @@ export class SuperSonicBridge {
     'sonic-pi-fx_slicer', 'sonic-pi-fx_wobble', 'sonic-pi-fx_panslicer',
   ])
 
-  private applyFxImmediate(
+  /**
+   * Build an FX `/s_new` (group 101, addToHead) — allocates the node id and
+   * the rand_buf for slicer/wobble/panslicer (on_start hook parity,
+   * synthinfo.rb). Shared by applyFxImmediate (future/normal-queue path) and
+   * applyFxOrdered (immediate-FX bundle path, #424) so both build identical
+   * messages.
+   */
+  private buildFxMessage(
     fullName: string,
-    audioTime: number,
     params: Record<string, number>,
     inBus: number,
     outBus: number,
-  ): number {
+  ): { nodeId: number; args: (string | number)[] } {
     const nodeId = this.sonic!.nextNodeId()
     const paramList: (string | number)[] = ['in_bus', inBus, 'out_bus', outBus]
-    // Inject rand_buf for slicer/wobble/panslicer — mirrors on_start hook in synthinfo.rb.
-    // Lazy allocation: first use creates the buffer. Avoids init() timeout issues.
     if (SuperSonicBridge.RAND_BUF_FX.has(fullName)) {
       if (this.randBufId < 0) {
         const bufNum = this.nextBufNum++
@@ -962,8 +985,81 @@ export class SuperSonicBridge {
     for (const key in params) {
       paramList.push(key, params[key])
     }
-    this.queueMessage(audioTime, '/s_new', [fullName, nodeId, 0, 101, ...paramList])
+    return { nodeId, args: [fullName, nodeId, 0, 101, ...paramList] }
+  }
+
+  private applyFxImmediate(
+    fullName: string,
+    audioTime: number,
+    params: Record<string, number>,
+    inBus: number,
+    outBus: number,
+  ): number {
+    const { nodeId, args } = this.buildFxMessage(fullName, params, inBus, outBus)
+    this.queueMessage(audioTime, '/s_new', args)
     return nodeId
+  }
+
+  /**
+   * #424: queue an FX `/s_new` into the immediate-FX bundle instead of its own
+   * timetag-0 bundle. The whole nested with_fx chain accumulates here and is
+   * emitted as ONE OSC bundle by flushImmediateFx() (triggered by the next
+   * queued synth/sample, or by the FX block's explicit flush). scsynth runs a
+   * bundle's messages in array order, so the chain instantiates
+   * outer-before-inner deterministically — the scsynth-side same-timetag
+   * /s_new reorder (reversed group-101 tree → silence, ~6% of mod_303 runs)
+   * can no longer occur. FX synthdefs are preloaded (preloadFxSynthDefs), so
+   * the common path resolves synchronously and no scheduler tick can split a
+   * nested chain across the await; a cache-miss FX that genuinely awaits a
+   * network load is the lone case where a concurrent loop's note could flush
+   * the chain early (degrading to the prior per-FX behaviour for that run).
+   * Returns the FX node id (for control()/nodeRef).
+   */
+  applyFxOrdered(
+    fxName: string,
+    params: Record<string, number>,
+    inBus: number,
+    outBus: number = 0,
+  ): Promise<number> {
+    if (!this.sonic) throw new Error('SuperSonic not initialized')
+    const fullName = fxName.startsWith('sonic-pi-') ? fxName : `sonic-pi-fx_${fxName}`
+    const enqueue = (): number => {
+      const { nodeId, args } = this.buildFxMessage(fullName, params, inBus, outBus)
+      this.immediateFxQueue.push({ address: '/s_new', args })
+      if (this.oscTraceHandler) this.oscTraceHandler(formatOscTrace('/s_new', args, 0))
+      return nodeId
+    }
+    if (this.loadedSynthDefs.has(fullName)) return Promise.resolve(enqueue())
+    return this.ensureSynthDefLoaded(fullName).then(enqueue)
+  }
+
+  /**
+   * #424: emit the accumulated immediate-FX `/s_new` as ONE OSC bundle at
+   * timetag 0 (a past NTP → scsynth dispatches it now). scsynth executes a
+   * bundle's messages in array order → outer FX before inner FX,
+   * deterministically. No-op when nothing is pending.
+   */
+  flushImmediateFx(): void {
+    if (!this.sonic || this.immediateFxQueue.length === 0) return
+    const ntpTime = audioTimeToNTP(0, this.sonic.audioContext.currentTime)
+    if (this.immediateFxQueue.length === 1) {
+      const msg = this.immediateFxQueue[0]
+      this.sonic.sendOSC(this.oscEncoder!.encodeSingleBundle(ntpTime, msg.address, msg.args))
+    } else {
+      // ONE bundle is the whole point — scsynth's in-order message execution is
+      // what makes the chain deterministic. A 2-5 FX chain is far under the
+      // 1024-byte slot; only a pathologically deep nest would exceed it, where
+      // individual sends reintroduce the race (warned, audio over silence).
+      try {
+        this.sonic.sendOSC(fallbackEncodeBundle(ntpTime, this.immediateFxQueue))
+      } catch {
+        this.warnHandler?.('with_fx: FX chain too large for one bundle — ordering not guaranteed')
+        for (const msg of this.immediateFxQueue) {
+          this.sonic.sendOSC(this.oscEncoder!.encodeSingleBundle(ntpTime, msg.address, msg.args))
+        }
+      }
+    }
+    this.immediateFxQueue.length = 0
   }
 
   /**
