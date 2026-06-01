@@ -21,6 +21,10 @@
 # Env: OB_RUN_EPOCH (supervisor sets; default now) · OB_MAX_ATTEMPTS (3)
 #      OB_DURATION_MS (15000) · OB_TIMEOUT_SEC (110) · OB_RESTART_INTERVAL (5)
 #      OB_POOLS (official,book)
+#
+# Per-fixture budget: long compositions (bach ≈97s) get a wider window + timeout
+# via fixture_budget() — the defaults truncate them to INCONCL, NOT an engine
+# stall (#429, verified: bach renders 406 notes / full 97s standalone).
 
 REPO=/Users/mrityunjaybhardwaj/Documents/projects/sonicPiWeb
 OFFICIAL_DIR="/Applications/Sonic Pi.app/Contents/Resources/etc/examples"
@@ -65,17 +69,32 @@ cleanup_capture_orphans() {
   pkill -f "node .*tsx.*tools/capture-desktop.ts" 2>/dev/null || true
 }
 
+# Per-fixture budget overrides for long compositions whose FULL render exceeds
+# the default 15s window / 110s timeout. bach.rb is a ~97s minuet (406 notes);
+# verified rendering fully in standalone capture (#429) — the default window
+# truncated it to INCONCL, not an engine stall. Desktop+web render SEQUENTIALLY,
+# so the timeout must cover ~2× the duration + analysis. Returns "DURATION_MS TIMEOUT_SEC".
+fixture_budget() {
+  case "$1" in
+    bach) echo "100000 280" ;;
+    *)    echo "$DURATION_MS $TIMEOUT_SEC" ;;
+  esac
+}
+
 guarded_compare() {
   local fp="$1" base="$2"
+  local dur to
+  read -r dur to <<< "$(fixture_budget "$base")"
+  [ "$dur" != "$DURATION_MS" ] && echo "  ⏲ long-fixture budget: ${dur}ms window, ${to}s timeout"
   npx tsx tools/compare-desktop-vs-web.ts \
-    --file "$fp" --duration "$DURATION_MS" --name "$base" > /tmp/ob_compare.log 2>&1 &
+    --file "$fp" --duration "$dur" --name "$base" > /tmp/ob_compare.log 2>&1 &
   local cpid=$!
   local waited=0 timedout=0
   while kill -0 "$cpid" 2>/dev/null; do
     sleep 3; waited=$((waited + 3))
-    if [ "$waited" -ge "$TIMEOUT_SEC" ]; then
+    if [ "$waited" -ge "$to" ]; then
       timedout=1
-      echo "  ⏱ TIMEOUT ${TIMEOUT_SEC}s — killing compare subtree for $base"
+      echo "  ⏱ TIMEOUT ${to}s — killing compare subtree for $base"
       pkill -P "$cpid" 2>/dev/null || true
       kill -9 "$cpid" 2>/dev/null || true
       break
