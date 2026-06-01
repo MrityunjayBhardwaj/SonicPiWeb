@@ -1389,6 +1389,48 @@ end`)
       expect(steps[0].note).toBe(60) // first tick → index 0
     })
 
+    // #430: `a.rotate!` used to emit invalid JS `a.rotate!()` ("Unexpected
+    // token '!'") which refused sonic_dreams.rb. Bang is now stripped on
+    // receiver methods, and `.rotate` maps to __b.rotate (returns a Ring; the
+    // chained `.first`/`[0]` resolves via the Ring proxy).
+    it('.rotate! strips the bang and rotates left by 1 (#430)', () => {
+      const { steps, error } = executeTranspiled(`live_loop :t do
+  notes = [60, 62, 64]
+  play notes.rotate!.first
+  sleep 1
+end`)
+      expect(error).toBeUndefined()
+      expect(steps[0].tag).toBe('play')
+      expect(steps[0].note).toBe(62) // rotate left 1 → [62,64,60], .first = 62
+    })
+
+    it('.rotate!(n) threads the rotation arg (#430)', () => {
+      const { steps, error } = executeTranspiled(`live_loop :t do
+  notes = [60, 62, 64, 65]
+  play notes.rotate!(2).first
+  sleep 1
+end`)
+      expect(error).toBeUndefined()
+      expect(steps[0].note).toBe(64) // rotate left 2 → [64,65,60,62], .first = 64
+    })
+
+    it('.shuffle! / .sort! receiver bang is stripped (#430)', () => {
+      const sorted = executeTranspiled(`live_loop :t do
+  notes = [64, 60, 62]
+  play notes.sort!.first
+  sleep 1
+end`)
+      expect(sorted.error).toBeUndefined()
+      expect(sorted.steps[0].note).toBe(60) // sort ascending → first = 60
+      // shuffle! must not throw (deterministic value depends on rng seed)
+      const shuffled = executeTranspiled(`live_loop :t do
+  play [60, 62, 64].shuffle!.first
+  sleep 1
+end`)
+      expect(shuffled.error).toBeUndefined()
+      expect(shuffled.steps[0].tag).toBe('play')
+    })
+
     it('variable reassignment works (bare assignment, not const)', () => {
       const { steps, error } = executeTranspiled(`live_loop :t do
   x = 60

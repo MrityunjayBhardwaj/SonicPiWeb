@@ -1381,7 +1381,14 @@ function transpileReceiverMethodCall(
   receiver: any, methodNode: any, argsNode: any, blockNode: any,
   fullNode: any, ctx: TranspileContext
 ): string {
-  const method = methodNode.text
+  // Strip the Ruby bang (!) from receiver method names — `a.rotate!` → `rotate`,
+  // `a.shuffle!` → `shuffle`, `a.sort!` → `sort` (#430). JS has no `!`-suffixed
+  // method names, so passing the bang through emits invalid JS (`a.rotate!()` →
+  // "Unexpected token '!'", which refused sonic_dreams.rb). Mirrors the bare-call
+  // strip at the top of transpileMethodCall. In-place mutation semantics are not
+  // preserved (copy semantics) — that only matters for exact non-PRNG parity.
+  const rawMethod = methodNode.text
+  const method = rawMethod.endsWith('!') ? rawMethod.slice(0, -1) : rawMethod
   const recStr = transpileNode(receiver, ctx)
 
   // N.times do |i| ... end
@@ -1467,6 +1474,14 @@ function transpileReceiverMethodCall(
   // .shuffle → b.shuffle(receiver) — works on both arrays and Rings
   if (method === 'shuffle') {
     return `__b.shuffle(${recStr})`
+  }
+
+  // .rotate(n) → __b.rotate(receiver, n) — works on arrays and Rings (#430).
+  // `rotate!` reaches here too (bang stripped above). Returns a Ring, so a
+  // chained `.first`/`[0]` resolves via the Ring proxy.
+  if (method === 'rotate') {
+    const args = argsNode ? transpileArgList(argsNode, ctx) : ''
+    return args ? `__b.rotate(${recStr}, ${args})` : `__b.rotate(${recStr})`
   }
 
   // .mirror(n) / .reflect(n) → thread the optional repeat arg (desktop
