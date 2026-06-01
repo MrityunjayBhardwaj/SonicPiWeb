@@ -938,6 +938,17 @@ export class ProgramBuilder {
     return new Ring(items)
   }
 
+  /**
+   * Rotate an array or Ring by n positions (default 1). Positive = left,
+   * matching Ruby `Array#rotate` / `Ring.rotate`. Returns a Ring (#430). Used
+   * by the transpiler for `.rotate` / `.rotate!` (bang stripped, copy
+   * semantics) — see `transpileReceiverMethodCall`.
+   */
+  rotate<T>(arr: T[] | Ring<T>, n: number = 1): Ring<T> {
+    const ring = arr instanceof Ring ? arr : new Ring([...arr])
+    return ring.rotate(n)
+  }
+
   pick<T>(arr: T[] | Ring<T>, n: number = 1): Ring<T> {
     const items = arr instanceof Ring ? arr.toArray() : [...arr]
     const result: T[] = []
