@@ -180,6 +180,7 @@ export function treeSitterTranspile(ruby: string): TreeSitterTranspileResult {
     definedFunctions: new Set(),
     indent: '',
     inthreadLoopCounter: { n: 0 },
+    fxLoopCounter: { n: 0 },
   }
 
   const js = transpileNode(tree.rootNode, ctx)
@@ -232,6 +233,8 @@ interface TranspileContext {
   srcLine?: number
   /** Hoisted-loop counter for `loop do` inside `in_thread` (issue #205). */
   inthreadLoopCounter?: { n: number }
+  /** Hoisted-loop counter for `loop do` inside `with_fx` (issue #426/SP111). */
+  fxLoopCounter?: { n: number }
   /**
    * SP95(d) #393: true while transpiling the *direct* body of a live_loop,
    * whose wrapper arrow is emitted `async`. Lets `sync` emit `await __b.sync()`
@@ -978,7 +981,13 @@ function transpileProgram(node: any, ctx: TranspileContext): string {
     if (method !== 'with_fx') return false
     // Check if with_fx contains a live_loop — if so, it's a block, not bare
     const text = c.text ?? ''
-    return !/live_loop/.test(text)
+    if (/live_loop/.test(text)) return false
+    // #426/SP111: a with_fx wrapping a bare `loop do` is ALSO a registering
+    // block (the loop is hoisted to an auto-named live_loop inside the fx),
+    // NOT bare code. Routing it through __run_once would emit a synchronous
+    // build-time `while(true)` → infinite Step[] push → renderer OOM.
+    const wfBlk = c.namedChildren.find((x: any) => x.type === 'do_block' || x.type === 'block')
+    return !(wfBlk && blockBodyHasBareLoop(wfBlk))
   })
   // Top-level `loop do … end` triggers the split so it can be hoisted to a
   // named live_loop. Without this flag, a program that contains only
@@ -1024,8 +1033,15 @@ function transpileProgram(node: any, ctx: TranspileContext): string {
       currentTopSynth = extractLiteralSynthArg(child)
     }
 
-    // Bare with_fx (no live_loop inside) should be treated as bare code, not a block
-    const isBareFxNode = method === 'with_fx' && !/live_loop/.test(child.text ?? '')
+    // Bare with_fx (no live_loop inside) should be treated as bare code, not a
+    // block — UNLESS it wraps a bare `loop do`, which is hoisted to a live_loop
+    // inside the fx (#426/SP111). Mirrors the hasBareFx check above.
+    const wfBlk = method === 'with_fx'
+      ? child.namedChildren.find((x: any) => x.type === 'do_block' || x.type === 'block')
+      : null
+    const isBareFxNode = method === 'with_fx'
+      && !/live_loop/.test(child.text ?? '')
+      && !(wfBlk && blockBodyHasBareLoop(wfBlk))
 
     // Bare top-level `loop do … end` — route to blocks and emit below as a
     // dedicated auto-named live_loop (SV16 — do not let the loop become
@@ -1858,6 +1874,74 @@ function transpileDefonce(
   return `${name} = defonce(${JSON.stringify(name)}, ${optsStr}, (__b) => {\n${stmts.join('\n')}\n${ctx.indent}})`
 }
 
+/**
+ * Drill into a do_block/block's `body_statement` wrapper to get the real
+ * statement children (skipping any block_parameters). Mirrors the body
+ * extraction in transpileInThread (#205).
+ */
+function blockBodyChildren(blockNode: any): any[] {
+  const raw = (blockNode?.namedChildren ?? []).filter((c: any) => c.type !== 'block_parameters')
+  if (raw.length === 1 && raw[0]?.type === 'body_statement') {
+    return raw[0].namedChildren ?? []
+  }
+  return raw
+}
+
+/** True if a do/brace block directly contains a `loop do … end` statement (#426/SP111). */
+function blockBodyHasBareLoop(blockNode: any): boolean {
+  return blockBodyChildren(blockNode).some((c: any) => {
+    const m = (c.type === 'call' || c.type === 'method_call')
+      ? (c.childForFieldName('method')?.text ?? c.namedChildren[0]?.text)
+      : null
+    return m === 'loop' && c.namedChildren.some((x: any) => x.type === 'do_block' || x.type === 'block')
+  })
+}
+
+/**
+ * Transpile a with_fx body that contains a bare `loop do`, hoisting each loop
+ * to an auto-named live_loop INSIDE the fx callback (#426/SP111, SV16). Setup
+ * statements before the loop are emitted as-is; statements after a loop are
+ * unreachable (a `loop` runs forever) and dropped with a warning — same policy
+ * as transpileInThread.
+ */
+function transpileWithFxLoopBody(
+  blockNode: any, bodyCtx: TranspileContext, ctx: TranspileContext
+): string {
+  const counter = ctx.fxLoopCounter ?? { n: 0 }
+  // `live_loop` is always a FREE function (a global from the sandbox scope),
+  // never a ProgramBuilder method — transpileLiveLoop emits it unprefixed at
+  // every depth, and BUILDER_METHODS excludes it. So emit it unprefixed here
+  // too; `__b.live_loop` would throw "is not a function".
+  const parts: string[] = []
+  let sawLoop = false
+  let droppedAfterLoop = false
+  for (const child of blockBodyChildren(blockNode)) {
+    const m = (child.type === 'call' || child.type === 'method_call')
+      ? (child.childForFieldName('method')?.text ?? child.namedChildren[0]?.text)
+      : null
+    const isLoop = m === 'loop' &&
+      child.namedChildren.some((c: any) => c.type === 'do_block' || c.type === 'block')
+    if (isLoop) {
+      const body = child.namedChildren.find((c: any) => c.type === 'do_block' || c.type === 'block')
+      // live_loop bodies are emitted async (SP95(d) — `await __b.sync()`).
+      const innerCtx: TranspileContext = { ...bodyCtx, insideLoop: true, asyncBody: true }
+      const innerStr = transpileBlockBody(body, innerCtx)
+      const idx = counter.n++
+      parts.push(`${ctx.indent}  live_loop("__fxloop_${idx}", async (__b) => {\n${innerStr}\n${ctx.indent}  })`)
+      sawLoop = true
+    } else if (sawLoop) {
+      droppedAfterLoop = true
+    } else {
+      parts.push(`${ctx.indent}  ${transpileNode(child, bodyCtx)}`)
+    }
+  }
+  if (droppedAfterLoop) {
+    const line = blockNode.startPosition?.row != null ? blockNode.startPosition.row + 1 : '?'
+    ctx.errors.push(`Warning at line ${line}: statements after \`loop do\` inside with_fx are unreachable and were dropped.`)
+  }
+  return parts.filter(s => s.trim()).join('\n')
+}
+
 function transpileWithBlock(
   methodName: string, argsNode: any, blockNode: any, ctx: TranspileContext
 ): string {
@@ -1895,7 +1979,18 @@ function transpileWithBlock(
   const bodyCtx: TranspileContext = ctx.insideLoop
     ? { ...ctx, insideLoop: true }
     : { ...ctx }  // keep insideLoop false — live_loops inside will set their own
-  const bodyStr = transpileBlockBody(blockNode, bodyCtx)
+  // #426/SP111: a bare `loop do … end` directly inside with_fx must be hoisted
+  // to an auto-named live_loop, exactly as top-level (lines ~1116) and in_thread
+  // (transpileInThread) loops are (SV16). Building it inline emits a synchronous
+  // `while(true) { __b.play; __b.sleep }` whose build-time sleep-step resets the
+  // budget guard every iteration → infinite Step[] push during the build pass →
+  // renderer OOM (issue #426 / crushed.rb). The live_loop stays INSIDE the
+  // with_fx callback so the FX bus still wraps it (SV13). Only with_fx is
+  // affected because it is the only with-block that reaches `blocks` (registering
+  // path); other with-blocks keep current behaviour.
+  const bodyStr = (methodName === 'with_fx' && blockBodyHasBareLoop(blockNode))
+    ? transpileWithFxLoopBody(blockNode, bodyCtx, ctx)
+    : transpileBlockBody(blockNode, bodyCtx)
 
   const optsStr = opts.length > 0 ? `{ ${opts.join(', ')} }` : ''
   const posStr = positional.join(', ')
