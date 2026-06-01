@@ -498,13 +498,19 @@ function transpileNode(node: any, ctx: TranspileContext): string {
       return `[${node.namedChildren.map((c: any) => `"${c.text}"`).join(', ')}]`
 
     case 'array': {
+      // Drop inline `#` comments — a literal is comma-joined onto ONE JS line,
+      // so a `//` comment child would swallow the rest of the array (orchard_improv
+      // `pent = [#:B1, … :Fs2, …]` → broken literal → ENGINE-SILENT). A comment
+      // carries no element value; keeping it would also leave an elision hole.
       const elements = node.namedChildren
+        .filter((c: any) => c.type !== 'comment')
         .map((c: any) => transpileNode(c, ctx))
       return `[${elements.join(', ')}]`
     }
 
     case 'hash': {
       const pairs = node.namedChildren
+        .filter((c: any) => c.type !== 'comment')
         .map((c: any) => transpileNode(c, ctx))
       return `{ ${pairs.join(', ')} }`
     }
@@ -519,7 +525,7 @@ function transpileNode(node: any, ctx: TranspileContext): string {
     }
 
     case 'subarray':
-      return `[${node.namedChildren.map((c: any) => transpileNode(c, ctx)).join(', ')}]`
+      return `[${node.namedChildren.filter((c: any) => c.type !== 'comment').map((c: any) => transpileNode(c, ctx)).join(', ')}]`
 
     // ---- Identifiers ----
     case 'identifier': {
@@ -1541,8 +1547,10 @@ function transpileReceiverMethodCall(
     return recStr
   }
 
-  // .to_i → Math.floor
-  if (method === 'to_i') {
+  // .to_i / .to_int → Math.floor. Ruby's Integer#to_int is the implicit-coercion
+  // alias of to_i; orchard_improv uses `lene.to_int.times`. Without this, a number
+  // has no `.to_int` method → "x.to_int is not a function".
+  if (method === 'to_i' || method === 'to_int') {
     return `Math.floor(${recStr})`
   }
 
@@ -2491,6 +2499,10 @@ function transpileArgList(node: any, ctx: TranspileContext, injectSrcLine = fals
   const kwargs: string[] = []
 
   for (const arg of args) {
+    // Inline `#` comments are comma-joined with real args onto one JS line; a
+    // `//` would swallow the rest of the call. Drop them (#436, same class as
+    // the array/hash literal fix).
+    if (arg.type === 'comment') continue
     if (arg.type === 'pair') {
       const key = arg.namedChildren[0]
       const val = arg.namedChildren[1]

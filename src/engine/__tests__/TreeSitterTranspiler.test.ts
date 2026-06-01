@@ -750,6 +750,36 @@ end`)
       expect(result.ok).toBe(true)
       expect(result.code).toContain('//')
     })
+
+    it('inline # comment inside a multi-line array literal does not break the flattened literal (orchard_improv)', () => {
+      // The array is comma-joined onto one JS line, so a `//` comment child would
+      // swallow the rest of the array. Drop comment children instead.
+      const result = treeSitterTranspile(`pent = [#:B1, :Cs2,
+        :Fs2, :Gs2,
+        :B2]
+play pent[0]`)
+      expect(result.ok).toBe(true)
+      expect(result.code).toContain('pent = ["Fs2", "Gs2", "B2"]')
+      expect(result.code).not.toContain('[//')
+    })
+
+    it('inline # comment inside an argument list does not break the call (same class as #436)', () => {
+      const result = treeSitterTranspile(`play 60, # the root
+        amp: 0.5`)
+      expect(result.ok).toBe(true)
+      expect(result.code).not.toContain(', //')
+      expect(result.code).toContain('amp: 0.5')
+    })
+
+    it('.to_int lowers to Math.floor like .to_i (orchard_improv `lene.to_int.times`)', () => {
+      const result = treeSitterTranspile(`n = 5
+n.to_int.times do
+  play 60
+  sleep 0.1
+end`)
+      expect(result.ok).toBe(true)
+      expect(result.code).toContain('Math.floor(n)')
+    })
   })
 
   describe('Advanced constructs', () => {
