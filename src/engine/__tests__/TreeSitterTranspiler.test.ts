@@ -618,6 +618,57 @@ end`)
       expect(result.code).toContain('live_loop("__inthread_loop_0"')
     })
 
+    // Issue #426/SP111: `loop do` inside with_fx used to emit a synchronous
+    // build-time `while(true) { __b.play; __b.sleep }` (the sleep-step resets
+    // the budget guard every iteration → infinite Step[] push → renderer OOM).
+    // crushed.rb (`with_fx :bitcrusher do loop do … end end`) crashed the tab.
+    // Fix hoists the loop to an auto-named live_loop INSIDE the fx (top-level
+    // `with_fx{live_loop}` is the proven FX-routing path), exactly like a
+    // top-level / in_thread loop (SV16).
+    it('hoists loop do inside with_fx to a live_loop, not build-time while(true) (#426)', () => {
+      const result = treeSitterTranspile(`with_fx :bitcrusher do
+  loop do
+    play 50
+    sleep 0.5
+  end
+end`)
+      expect(result.ok).toBe(true)
+      expect(result.code).not.toContain('while (true)')
+      expect(result.code).toContain('with_fx("bitcrusher"')
+      expect(result.code).toContain('live_loop("__fxloop_0"')
+      // `live_loop` is a free function (never `__b.live_loop`) — that would throw
+      // "is not a function".
+      expect(result.code).not.toContain('__b.live_loop')
+      expect(() => new Function(result.code)).not.toThrow()
+    })
+
+    it('keeps setup statements before loop in with_fx; hoists the loop (#426)', () => {
+      const result = treeSitterTranspile(`with_fx :reverb do
+  play 72
+  loop do
+    play 50
+    sleep 0.5
+  end
+end`)
+      expect(result.ok).toBe(true)
+      expect(result.code).not.toContain('while (true)')
+      expect(result.code).toContain('with_fx("reverb"')
+      expect(result.code).toContain('live_loop("__fxloop_0"')
+    })
+
+    it('with_fx wrapping live_loop is unchanged by the #426 loop-hoist', () => {
+      const result = treeSitterTranspile(`with_fx :bitcrusher do
+  live_loop :crush do
+    play 50
+    sleep 0.5
+  end
+end`)
+      expect(result.ok).toBe(true)
+      expect(result.code).toContain('with_fx("bitcrusher"')
+      expect(result.code).toContain('live_loop("crush"')
+      expect(result.code).not.toContain('__fxloop')
+    })
+
     it('define with block params', () => {
       const result = treeSitterTranspile(`define :bass_hit do
   sample :bd_haus, amp: 2

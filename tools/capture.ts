@@ -102,11 +102,18 @@ async function captureRun(
     // `topLevelWithFx` / `fxAwareWrappedLiveLoop` path does. Result: dry
     // signal in the capture even though desktop hears the FX.
     //
-    // Heuristic: regex-detect `live_loop` or `in_thread` as standalone
-    // identifiers at column-zero-ish positions. Strings/comments containing
-    // these words are rare in test snippets; false positives just degrade
-    // to "skipped wrap" which is safe for short snippets too.
-    const alreadyAsync = /^[ \t]*(?:live_loop|in_thread)\b/m.test(code)
+    // Heuristic: regex-detect `live_loop`, `in_thread`, or a bare `loop do`
+    // as standalone identifiers at column-zero-ish positions. After the
+    // #426/SP111 transpiler fix, a top-level `loop do` (bare OR wrapped in
+    // `with_fx`) is async-by-construction — it registers an auto-named
+    // live_loop and returns immediately, exactly like an explicit live_loop.
+    // Pushing it into `in_thread` would (a) be unnecessary and (b) break the
+    // with_fx FX-routing parity (the nested `__b.with_fx` builder path doesn't
+    // wire the FX bus the way top-level `topLevelWithFx` does — `crushed.rb`).
+    // So treat a top-level `loop do` like live_loop/in_thread and skip the wrap.
+    // Strings/comments containing these words are rare in test snippets; a false
+    // positive just degrades to "skipped wrap", safe for short snippets too.
+    const alreadyAsync = /^[ \t]*(?:live_loop|in_thread|loop)\b/m.test(code)
     // with_bpm 60 around the sleep so a user's `use_bpm 120` (or any other
     // tempo set inside <code>) doesn't shrink/expand the recording window.
     // At 60 BPM, sleep N == N real seconds.
