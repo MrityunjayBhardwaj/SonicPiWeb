@@ -247,7 +247,14 @@ function writeComparisonReport(r: ComparisonResult): void {
   let invalid = false
   let webEngineError = false
   let aggregatesUnreliable = false
+  // SV48 (#427): a missing web WAV must NAME its layer — ENGINE-REFUSED (the
+  // engine threw / refused to transpile) ≠ ENGINE-SILENT (the engine ran but
+  // produced no recording) ≠ TOOL-FAIL (the capture pipeline lost a real blob).
+  // Branding everything "TOOL-FAIL #358" sent triage to the harness when the
+  // bug was in the engine/transpiler (cost the #426/#427/#430 re-diagnoses).
+  let webNoWavClass: 'engine-refused' | 'engine-silent' | 'tool-fail' | null = null
   const fail = (m: string) => { t0.push(`- ✗ ${m}  **(HARD — verdict INVALID)**`); invalid = true }
+  const failNamed = (m: string) => { t0.push(`- ✗ ${m}  **(HARD — no Tier-1 verdict)**`); invalid = true }
   const errFail = (m: string) => { t0.push(`- ✗ ${m}  **(HARD — verdict ERROR; pitch verdict not formed)**`); webEngineError = true }
   const soft = (m: string) => { t0.push(`- ⚠ ${m}  **(SOFT — Tier 3 + 1.3 unreliable; Tier 1 pitch still valid)**`); aggregatesUnreliable = true }
   const passG = (m: string) => t0.push(`- ✓ ${m}`)
@@ -264,13 +271,27 @@ function writeComparisonReport(r: ComparisonResult): void {
   }
   if (!dStats) fail('Desktop produced no WAV — see desktop tool stdout below')
   if (!wStats) {
-    // #358: distinguish capture-tool failure (TOOL-FAIL) from engine silence.
-    // The sentinel reason comes from capture.ts emitting `**File:** none — <reason>`
-    // when the blob never resolved. Without this distinction the verdict line
-    // reads as if the engine produced no audio — when in fact the engine may
-    // have rendered audio that the capture tool failed to pick up.
-    if (r.web.toolFailReason) {
-      fail(`Web produced no WAV — TOOL-FAIL (capture-pipeline #358): ${r.web.toolFailReason}. The engine may have produced audio; check the App Console Output in the web report for /s_new activity before concluding ENGINE-SILENT`)
+    // SV48 (#427): classify the missing web WAV by LAYER instead of always
+    // "TOOL-FAIL #358". The capture diag carries the decisive signal —
+    // `wavBlobClicks` counts how many times a `.wav` download anchor was
+    // clicked. >0 ⇒ a recording WAS produced and a download fired but the blob
+    // could not be resolved (genuine capture-pipeline failure). 0 ⇒
+    // recording_save never had a recording: the engine refused (errored) or ran
+    // silently. Branding all three "TOOL-FAIL" sent triage to the harness when
+    // the bug was in the engine/transpiler (the #426/#427/#430 re-diagnoses).
+    const reason = r.web.toolFailReason ?? ''
+    const wavClicks = parseInt(reason.match(/wavBlobClicks=(\d+)/)?.[1] ?? '0', 10)
+    if (webEngineError) {
+      // Engine threw/refused (Tier-0 ERROR already set). The missing WAV is a
+      // consequence — attribute it to the error, not the capture tool.
+      webNoWavClass = 'engine-refused'
+      failNamed('Web produced no WAV — ENGINE-REFUSED: the engine errored/refused to run (see "Web engine errors" above). NOT a capture-tool miss.')
+    } else if (reason && wavClicks > 0) {
+      webNoWavClass = 'tool-fail'
+      failNamed(`Web produced no WAV — TOOL-FAIL (capture pipeline): a .wav download fired (wavBlobClicks=${wavClicks}) but the blob could not be resolved — the engine likely produced audio. Debug the harness. ${reason}`)
+    } else if (reason) {
+      webNoWavClass = 'engine-silent'
+      failNamed(`Web produced no WAV — ENGINE-SILENT: no .wav download fired (wavBlobClicks=0) — recording_save found no recording, so the engine emitted no audio. NOT a capture-tool failure; check the App Console for /s_new activity. ${reason}`)
     } else {
       fail('Web produced no WAV — see web tool stdout below')
     }
@@ -452,6 +473,15 @@ function writeComparisonReport(r: ComparisonResult): void {
     // chase the wrong question.
     const summary = r.web.errors[0].replace(/\s+/g, ' ').slice(0, 200)
     lines.push(`### ❌ ERROR — Web engine threw during capture; pitch verdict not formed. \`${summary}\``)
+  } else if (webNoWavClass === 'engine-silent') {
+    // SV48 (#427): the engine ran but produced no recording — debug the engine,
+    // not the capture harness. Distinct from a precondition INVALID and from a
+    // genuine TOOL-FAIL.
+    lines.push(`### ❌ ENGINE-SILENT — the web engine ran but produced no recording (no /s_new reached the recorder; SV48). Debug the engine, not the capture harness. No Tier-1 verdict.`)
+  } else if (webNoWavClass === 'tool-fail') {
+    // SV48 (#427): a real blob was lost by the capture pipeline — debug the
+    // harness, not the engine.
+    lines.push(`### ❌ TOOL-FAIL — capture pipeline lost a real WAV blob (a .wav download fired but could not be resolved; SV48). The engine likely produced audio. Debug the harness, not the engine. No Tier-1 verdict.`)
   } else if (invalid) {
     lines.push(`### ❌ INVALID — Tier 0 HARD gate failed. The pitch sequence itself is unreliable; no verdict until fixed.`)
   } else if (pitchVerdict.startsWith('✓')) {
