@@ -46,7 +46,8 @@ describe('cogate-2 SILENT-FAIL fixes (#382 #383 #384)', () => {
       expect(r.hasError).toBe(false)
       // Before fix: `function f() { f }` — bare reference, no recursion possible.
       // After fix: `function f() { f(__b) }` — recursion → stack overflow → user-visible error.
-      expect(r.code).toMatch(/function\s+f\s*\(\s*\)\s*\{\s*f\(__b\)\s*\}/)
+      // User-defined functions are namespaced (#432) so a local can't shadow them.
+      expect(r.code).toMatch(/function\s+__spdef_f\s*\(\s*\)\s*\{\s*__spdef_f\(__b\)\s*\}/)
     })
 
     it('def + call afterwards: f resolves to f(__b)', () => {
@@ -54,7 +55,8 @@ describe('cogate-2 SILENT-FAIL fixes (#382 #383 #384)', () => {
       expect(r.hasError).toBe(false)
       // The post-def `f` MUST be a call. Before fix it was a bare reference
       // (no-op evaluating to the function object), so user code did nothing.
-      expect(r.code).toMatch(/^\s*f\(__b\)/m)
+      // Namespaced (#432).
+      expect(r.code).toMatch(/^\s*__spdef_f\(__b\)/m)
     })
 
     it('B6 reproducer compiles to recursing JS that throws RangeError', () => {

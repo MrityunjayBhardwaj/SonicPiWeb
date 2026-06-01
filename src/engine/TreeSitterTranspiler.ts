@@ -337,6 +337,28 @@ const BUILDER_METHODS = new Set([
  * Inside a loop, these must NOT get the `b.` prefix —
  * they're captured from the enclosing scope via the Proxy.
  */
+/**
+ * Ruby keeps method names and local variables in SEPARATE namespaces, so a
+ * `define :synths` and a local `synths = [...]` coexist — `synths(n)` calls the
+ * method, bare `synths` reads the local. JS collapses both into one lexical
+ * binding: the bare assignment `synths = [...]` reassigns the `function synths`
+ * declaration's slot (the assignment is lexically resolved, never reaching the
+ * Sandbox proxy), so the later `synths(n)` call hits the array → "synths is not
+ * a function" (#432, sonic_dreams).
+ *
+ * Fix: emit every user-defined function (define / ndefine / def) under a reserved
+ * prefix that a user's local variable can never lexically shadow. Method CALLS
+ * (`synths(n)`, bare-statement `bd`) resolve to the prefixed name; local-variable
+ * reads (`synths.first`, `synths = [...]`) keep the plain name and flow through
+ * the proxy scope — exactly mirroring Ruby's two-namespace rule. The persistence
+ * registrar `define(name, fn)` keeps the PLAIN string key so #215 cross-eval
+ * seeding (proxy resolves a removed define's plain name) still works.
+ */
+const DEF_PREFIX = '__spdef_'
+function defJsName(name: string): string {
+  return DEF_PREFIX + name
+}
+
 const TOP_LEVEL_SCOPE = new Set([
   'live_loop', 'stop_loop', 'define',
   'use_bpm', 'use_synth', 'use_random_seed', 'use_arg_bpm_scaling',
@@ -534,9 +556,10 @@ function transpileNode(node: any, ctx: TranspileContext): string {
       const isStatement = parentType === 'body_statement' || parentType === 'program' ||
                           parentType === 'then' || parentType === 'block_body'
 
-      // Bare identifier that matches a user-defined function → call it with __b
+      // Bare identifier that matches a user-defined function → call it with __b.
+      // Namespaced so a same-named local variable can't shadow the call (#432).
       if (isStatement && ctx.definedFunctions.has(name)) {
-        return `${name}(__b)`
+        return `${defJsName(name)}(__b)`
       }
 
       // Bare identifier that matches a known no-arg DSL function.
@@ -825,7 +848,9 @@ function transpileNode(node: any, ctx: TranspileContext): string {
         ? params.namedChildren.map((c: any) => transpileNode(c, ctx)).join(', ')
         : ''
       const bodyStr = body ? transpileNode(body, ctx) : ''
-      return `function ${nameNode.text}(${paramStr}) {\n${bodyStr}\n${ctx.indent}}`
+      // Namespaced (#432) — calls resolve via defJsName; keeps def out of the
+      // local-variable namespace, mirroring Ruby's method-vs-local separation.
+      return `function ${defJsName(nameNode.text)}(${paramStr}) {\n${bodyStr}\n${ctx.indent}}`
     }
 
     // ---- Lambda ----
@@ -1314,10 +1339,11 @@ function transpileMethodCall(node: any, ctx: TranspileContext): string {
       return `__b.play(${args}, { synth: "${methodName}" })`
     }
 
-    // User-defined function call
+    // User-defined function call — namespaced so a same-named local variable
+    // can't shadow the call (#432). The local read keeps the plain name.
     if (ctx.definedFunctions.has(methodName)) {
       const args = argsNode ? transpileArgList(argsNode, ctx) : ''
-      return `${methodName}(__b${args ? ', ' + args : ''})`
+      return `${defJsName(methodName)}(__b${args ? ', ' + args : ''})`
     }
 
     // Methods ending with ? — rename to _q, with b. prefix (on ProgramBuilder)
@@ -1817,9 +1843,13 @@ function transpileDefine(
   // For `define`, also call the runtime registrar so the engine persists the
   // function across re-evals (#215). `ndefine` skips this — its semantic is
   // per-eval only.
-  const decl = `function ${name}(__b${paramStr ? ', ' + paramStr : ''}) {\n${bodyStr}\n${ctx.indent}}`
+  // Namespaced JS binding (#432) so a same-named local variable can't clobber
+  // the function. The persistence registrar keeps the PLAIN string key — proxy
+  // seeding of a removed define (#215) resolves by plain name.
+  const jsName = defJsName(name)
+  const decl = `function ${jsName}(__b${paramStr ? ', ' + paramStr : ''}) {\n${bodyStr}\n${ctx.indent}}`
   if (methodName === 'define') {
-    return `${decl};\n${ctx.indent}define(${JSON.stringify(name)}, ${name})`
+    return `${decl};\n${ctx.indent}define(${JSON.stringify(name)}, ${jsName})`
   }
   return decl
 }

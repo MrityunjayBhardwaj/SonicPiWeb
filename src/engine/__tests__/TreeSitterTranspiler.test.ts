@@ -679,9 +679,11 @@ live_loop :groove do
   sleep 0.5
 end`)
       expect(result.ok).toBe(true)
-      expect(result.code).toContain('function bass_hit(__b)')
+      // User-defined functions live in a reserved namespace (#432) so a local
+      // variable can never shadow the call.
+      expect(result.code).toContain('function __spdef_bass_hit(__b)')
       // Call to defined function should inject __b
-      expect(result.code).toContain('bass_hit(__b)')
+      expect(result.code).toContain('__spdef_bass_hit(__b)')
     })
 
     it('ndefine produces same JS function decl as define (#211)', () => {
@@ -694,8 +696,8 @@ live_loop :run do
   sleep 1
 end`)
       expect(result.ok).toBe(true)
-      expect(result.code).toContain('function hit(__b)')
-      expect(result.code).toContain('hit(__b)')
+      expect(result.code).toContain('function __spdef_hit(__b)')
+      expect(result.code).toContain('__spdef_hit(__b)')
     })
   })
 
@@ -766,7 +768,36 @@ live_loop :t do
   sleep 4
 end`)
       expect(result.ok).toBe(true)
-      expect(result.code).toContain('function ocean(__b, num, amp_mul = 1)')
+      expect(result.code).toContain('function __spdef_ocean(__b, num, amp_mul = 1)')
+    })
+
+    it('a local variable does not clobber a same-named define call (#432)', () => {
+      // Ruby keeps method names and local variables in separate namespaces:
+      // `synths = [...]` is a local, `synths(n)` (with args) calls the define.
+      // JS collapses both into one lexical binding, so the array used to clobber
+      // the `function synths` declaration → "synths is not a function".
+      // Defines must live in a reserved namespace a local can never shadow.
+      const result = treeSitterTranspile(`define :synths do |x|
+  play x
+end
+
+define :go do
+  synths = [60, 62, 64]
+  n = synths.first
+  synths(n)
+end`)
+      expect(result.ok).toBe(true)
+      // Declaration is namespaced…
+      expect(result.code).toContain('function __spdef_synths(__b, x)')
+      // …and so is the call site (with args) — it must NOT resolve to the local.
+      expect(result.code).toContain('__spdef_synths(__b, n)')
+      expect(result.code).not.toMatch(/(?<!__spdef_)\bsynths\(__b, n\)/)
+      // The local variable read/assign stay on the plain name (proxy scope).
+      // `.first` lowers to `[0]`, so the read surfaces as `synths[0]`.
+      expect(result.code).toContain('synths = [60, 62, 64]')
+      expect(result.code).toContain('n = synths[0]')
+      // Persistence registrar keeps the PLAIN string key (#215 cross-eval seed).
+      expect(result.code).toContain('define("synths", __spdef_synths)')
     })
 
     it('begin/rescue', () => {
