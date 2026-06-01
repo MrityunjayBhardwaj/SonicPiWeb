@@ -21,16 +21,21 @@ artifacts/*
 # Playwright test results
 test-results/
 
-# FX A/B inspector — mirrors .captures/ artifacts (≈80 MB of WAVs per build)
-# Built by `npm run inspect`. The HTML viewers (test_results/index.html and
-# test_results/e2e.html) are the only checked-in viewer files; everything
-# else is regenerated on demand. raw-lpf/ is per-investigation captures.
+# Parity viewers mirror .captures/ artifacts (~1 GB of WAVs per full sweep).
+# CHECKED IN (small, regenerable from manifests): the HTML viewers
+# index.html / examples-sweep.html / book-examples-sweep.html /
+# launch-gate.html / fx-inspector.html and the JSON manifests
+# (examples-sweep.json, book-examples-sweep.json, e2e.json, community.json).
+# IGNORED: the per-slug WAV/PNG artifact dirs and the two large SSR viewers
+# (e2e.html, community.html) — all regenerate on demand via the build-* tools.
 test_results/fx/
 test_results/fx-baseline.json
 test_results/e2e/
 test_results/e2e.html
 test_results/community/
 test_results/community.html
+test_results/examples-sweep/
+test_results/book-examples-sweep/
 test_results/raw-lpf/
 # SP107 mono-sample investigation captures (≈10 MB WAVs + PNGs). The viewer
 # mono-sample-sp107.html is checked in; the recordings regenerate via

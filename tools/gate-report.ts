@@ -135,10 +135,13 @@ const html = `<!doctype html>
 </style></head>
 <body>
   <nav class="tab-bar">
-    <a href="index.html">FX A/B</a>
-    <a href="e2e.html">E2E suite</a>
+    <a href="index.html">overview</a>
+    <a href="examples-sweep.html">official</a>
+    <a href="book-examples-sweep.html">book</a>
+    <a href="e2e.html">e2e</a>
     <a href="community.html">community + forum</a>
-    <a href="launch-gate.html" data-active="1">🚦 Launch Gate</a>
+    <a href="launch-gate.html" data-active="1">🚦 launch gate</a>
+    <a href="fx-inspector.html">fx a/b</a>
   </nav>
   <div class="wrap">
     <h1>Launch Gate — PRNG-free non-heavy official roster</h1>

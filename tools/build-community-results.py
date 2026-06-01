@@ -16,6 +16,7 @@ import json
 import os
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -24,6 +25,7 @@ SUITE_ROOT = REPO / "tests" / "book-examples"
 OUT = REPO / "test_results"
 OUT_COMMUNITY = OUT / "community"
 OUT_HTML = OUT / "community.html"
+OUT_JSON = OUT / "community.json"
 
 
 # ─── Scoring + classification, mirrors tools/fx-sweep.ts ───────────────────
@@ -456,9 +458,13 @@ HTML_TEMPLATE = """<!doctype html>
 </head>
 <body>
 <nav class="tab-bar">
-  <a href="index.html">FX A/B <span class="count">40</span></a>
-  <a href="e2e.html">E2E suite <span class="count">10</span></a>
+  <a href="index.html">overview</a>
+  <a href="examples-sweep.html">official <span class="count">34</span></a>
+  <a href="book-examples-sweep.html">book <span class="count">18</span></a>
+  <a href="e2e.html">e2e <span class="count">10</span></a>
   <a href="community.html" data-active="1">community + forum <span class="count">48</span></a>
+  <a href="launch-gate.html">🚦 launch gate</a>
+  <a href="fx-inspector.html">fx a/b <span class="count">40</span></a>
   <span class="spacer"></span>
   <span class="meta"><a href="raw-lpf.html">raw-lpf investigation</a></span>
 </nav>
@@ -521,6 +527,38 @@ def main() -> int:
     ok = sum(1 for e in entries if e["desktop_ok"] and e["web_ok"])
     print(f"[community-builder] {ok}/{len(entries)} fixtures with both-sides captures")
     print(f"[community-builder] wrote {OUT_HTML}")
+
+    # JSON summary manifest for tools/build-aggregate-index.ts. Verdict scheme is
+    # consistency-score (Tier-2/3 timbre+level) — NOT Tier-1 pitch (SV46 caveat).
+    counts: dict[str, int] = {"HIGH": 0, "MID": 0, "LOW": 0, "INCONCLUSIVE": 0}
+    for e in entries:
+        counts[e["verdict"]] = counts.get(e["verdict"], 0) + 1
+    captured = sum(1 for e in entries if e["desktop_ok"] and e["web_ok"])
+    by_pool: dict[str, int] = {}
+    for e in entries:
+        by_pool[e["parent"]] = by_pool.get(e["parent"], 0) + 1
+    manifest = {
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "pool": "community",
+        "scheme": "consistency-score",
+        "schemeNote": "Tier-2/3 timbre+level (HIGH/MID/LOW/INCONCLUSIVE) — NOT Tier-1 pitch; blind to wrong melody per SV46.",
+        "viewer": "community.html",
+        "total": len(entries),
+        "captured": captured,
+        "subPools": by_pool,
+        "counts": counts,
+        "entries": [
+            {
+                "name": e["name"], "parent": e["parent"], "base": e["base"],
+                "verdict": e["verdict"], "score": e["score"],
+                "captured": bool(e["desktop_ok"] and e["web_ok"]),
+                "rms_ratio": e["rms_ratio"], "peak_ratio": e["peak_ratio"],
+                "mfcc_distance": e["mfcc_distance"], "l2_mel_db": e["l2_mel_db"],
+            } for e in entries
+        ],
+    }
+    OUT_JSON.write_text(json.dumps(manifest, indent=2))
+    print(f"[community-builder] wrote {OUT_JSON}  ({counts})")
     print(f"[community-builder] open: file://{OUT_HTML}")
     return 0
 

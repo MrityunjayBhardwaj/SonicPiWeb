@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -22,6 +23,7 @@ SUITE = REPO / "tools" / "audio_comparison" / "e2e_test_suite"
 OUT = REPO / "test_results"
 OUT_E2E = OUT / "e2e"
 OUT_HTML = OUT / "e2e.html"
+OUT_JSON = OUT / "e2e.json"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -403,9 +405,13 @@ HTML_TEMPLATE = """<!doctype html>
 </head>
 <body>
 <nav class="tab-bar">
-  <a href="index.html">FX A/B <span class="count">40</span></a>
-  <a href="e2e.html" data-active="1">E2E suite <span class="count">10</span></a>
+  <a href="index.html">overview</a>
+  <a href="examples-sweep.html">official <span class="count">34</span></a>
+  <a href="book-examples-sweep.html">book <span class="count">18</span></a>
+  <a href="e2e.html" data-active="1">e2e <span class="count">10</span></a>
   <a href="community.html">community + forum <span class="count">48</span></a>
+  <a href="launch-gate.html">🚦 launch gate</a>
+  <a href="fx-inspector.html">fx a/b <span class="count">40</span></a>
   <span class="spacer"></span>
   <span class="meta"><a href="raw-lpf.html">raw-lpf investigation</a></span>
 </nav>
@@ -451,6 +457,33 @@ def main() -> int:
     html = HTML_TEMPLATE.format(summary=summary_html, cards=cards_html)
     OUT_HTML.write_text(html)
     print(f"\n[e2e-builder] wrote {OUT_HTML}")
+
+    # JSON summary manifest, consumed by tools/build-aggregate-index.ts so the
+    # aggregate landing reads every pool's headline counts from a manifest.
+    # NOTE the verdict scheme here is consistency-score (Tier-2/3 timbre+level),
+    # NOT Tier-1 pitch — flagged explicitly so the aggregate never presents it
+    # as a musical-correctness verdict (SV46: Tier-2/3 may not stand as verdict).
+    counts: dict[str, int] = {"HIGH": 0, "MID": 0, "LOW": 0, "INCONCLUSIVE": 0}
+    for e in entries:
+        counts[e["verdict"]] = counts.get(e["verdict"], 0) + 1
+    manifest = {
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "pool": "e2e",
+        "scheme": "consistency-score",
+        "schemeNote": "Tier-2/3 timbre+level (HIGH/MID/LOW/INCONCLUSIVE) — NOT Tier-1 pitch; blind to wrong melody per SV46.",
+        "viewer": "e2e.html",
+        "total": len(entries),
+        "counts": counts,
+        "entries": [
+            {
+                "name": e["name"], "verdict": e["verdict"], "score": e["score"],
+                "rms_ratio": e["rms_ratio"], "peak_ratio": e["peak_ratio"],
+                "mfcc_distance": e["mfcc_distance"], "l2_mel_db": e["l2_mel_db"],
+            } for e in entries
+        ],
+    }
+    OUT_JSON.write_text(json.dumps(manifest, indent=2))
+    print(f"[e2e-builder] wrote {OUT_JSON}  ({counts})")
     print(f"[e2e-builder] open: file://{OUT_HTML}")
     return 0
 

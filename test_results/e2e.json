@@ -1,0 +1,106 @@
+{
+  "generatedAt": "2026-05-31T12:20:39.026412+00:00",
+  "pool": "e2e",
+  "scheme": "consistency-score",
+  "schemeNote": "Tier-2/3 timbre+level (HIGH/MID/LOW/INCONCLUSIVE) \u2014 NOT Tier-1 pitch; blind to wrong melody per SV46.",
+  "viewer": "e2e.html",
+  "total": 10,
+  "counts": {
+    "HIGH": 0,
+    "MID": 9,
+    "LOW": 1,
+    "INCONCLUSIVE": 0
+  },
+  "entries": [
+    {
+      "name": "01_minimal_techno",
+      "verdict": "MID",
+      "score": 53.17514422628281,
+      "rms_ratio": 0.4894957983193277,
+      "peak_ratio": 0.49026425591098743,
+      "mfcc_distance": 218.6724853515625,
+      "l2_mel_db": 21.198322296142578
+    },
+    {
+      "name": "02_fx_chain",
+      "verdict": "MID",
+      "score": 65.53870325177758,
+      "rms_ratio": 0.4887440758293839,
+      "peak_ratio": 0.5486877606082904,
+      "mfcc_distance": 104.16022491455078,
+      "l2_mel_db": 12.109970092773438
+    },
+    {
+      "name": "03_multi_layer",
+      "verdict": "MID",
+      "score": 56.88849855742891,
+      "rms_ratio": 0.5037974683544304,
+      "peak_ratio": 0.5277156906571301,
+      "mfcc_distance": 188.14315795898438,
+      "l2_mel_db": 19.919710159301758
+    },
+    {
+      "name": "04_sync_cue",
+      "verdict": "MID",
+      "score": 52.38260167088858,
+      "rms_ratio": 0.4916129032258065,
+      "peak_ratio": 0.6390094460045954,
+      "mfcc_distance": 254.14625549316406,
+      "l2_mel_db": 24.497207641601562
+    },
+    {
+      "name": "05_dj_dave_full",
+      "verdict": "MID",
+      "score": 56.33236566622099,
+      "rms_ratio": 0.4897119341563786,
+      "peak_ratio": 0.41065357007933506,
+      "mfcc_distance": 170.40652465820312,
+      "l2_mel_db": 16.778900146484375
+    },
+    {
+      "name": "06_euclidean",
+      "verdict": "LOW",
+      "score": 48.904640732289714,
+      "rms_ratio": 0.41240086517664026,
+      "peak_ratio": 0.3661,
+      "mfcc_distance": 179.60369873046875,
+      "l2_mel_db": 20.123809814453125
+    },
+    {
+      "name": "07_ambient",
+      "verdict": "MID",
+      "score": 67.28084292473406,
+      "rms_ratio": 1.7751937984496124,
+      "peak_ratio": 1.4911591355599212,
+      "mfcc_distance": 124.11866760253906,
+      "l2_mel_db": 16.283864974975586
+    },
+    {
+      "name": "08_full_composition",
+      "verdict": "MID",
+      "score": 62.88716415530786,
+      "rms_ratio": 0.48762109795479014,
+      "peak_ratio": 0.5851793765928249,
+      "mfcc_distance": 145.81434631347656,
+      "l2_mel_db": 14.13622760772705
+    },
+    {
+      "name": "09_dnb",
+      "verdict": "MID",
+      "score": 56.339497706956195,
+      "rms_ratio": 0.4793926247288503,
+      "peak_ratio": 0.4878880526810912,
+      "mfcc_distance": 183.12583923339844,
+      "l2_mel_db": 18.046783447265625
+    },
+    {
+      "name": "10_house",
+      "verdict": "MID",
+      "score": 52.89063869954268,
+      "rms_ratio": 0.4898678414096916,
+      "peak_ratio": 0.48589743589743584,
+      "mfcc_distance": 214.64410400390625,
+      "l2_mel_db": 21.874252319335938
+    }
+  ]
+}
