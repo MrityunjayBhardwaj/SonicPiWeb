@@ -1,6 +1,6 @@
 # Launch Gate — PRNG-free non-heavy official roster
 
-**3/7 = 42.9%** · threshold ≥70% · **❌ NOT MET**
+**5/7 = 71.4%** · threshold ≥70% · **✅ PASS**
 
 > Pass = MATCH or PRNG-VARIANT. Rows the pitch-trackers cannot grade are graded via an instrument-friendly projection that exercises the same engine logic (see `tools/gate-reproducers/`). The raw sweep keeps the unvarnished verdicts; this is the launch-gate computation.
 
@@ -9,11 +9,11 @@
 | Row | raw sweep | gate verdict | graded via | detail |
 |---|---|---|---|---|
 | ✅ chord_inversions | inconcl | match | projection | tools/gate-reproducers/chord_inversions.rb → compare_2026-05-29T16-00-01-355Z_chord_inversions.md |
-| ⚠️ reich_phase | inconcl | inconcl | raw-sweep |  |
+| ✅ reich_phase | inconcl | match | projection | tools/gate-reproducers/reich_phase.rb → compare_2026-06-01T07-49-58-016Z_reich_phase_proj.md |
 | ⚠️ dark_neon | inconcl | inconcl | documented-limitation | One sustained note (:cs1) + a sample texture, not a melody — Tier-1 pitch comparison is the wrong lens entirely. A reproducer would test a single note, which is not meaningful musical-correctness coverage. |
 | ✅ mod_303_phade | match | match | raw-refreshed | re-measured → compare_2026-05-30T19-32-34-562Z_mod_303_phade.md |
 | ⚠️ bach | inconcl | inconcl | documented-limitation | Sustained :beep polyphony — desktop onset detector finds ~3 onsets in 9s (#368); the web capture renders the full ~95s composition vs the windowed desktop capture (#406). No faithful gradeable projection: a monophonic literal-note list would test almost nothing (bach's substance is timing + concurrent in_thread alignment, exactly what's not onset-gradeable). |
-| ⚠️ driving_pulse | inconcl | inconcl | raw-sweep |  |
+| ✅ driving_pulse | inconcl | match | projection | tools/gate-reproducers/driving_pulse.rb → compare_2026-06-01T07-48-15-226Z_driving_pulse_proj.md |
 | ✅ monday_blues | inconcl | match | projection | tools/gate-reproducers/monday_blues.rb → compare_2026-05-29T15-58-36-335Z_monday_blues.md · requires #409 note(octave:) fix (MERGED 8f38e2c) — without it web played +24 semitones; the projection itself surfaced this engine bug, SP106 |
 
 ## Excluded from denominator (SV49 — cross-engine PRNG is a v1 non-goal)

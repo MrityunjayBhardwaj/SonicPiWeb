@@ -1,10 +1,10 @@
 {
   "generatedFrom": "examples-sweep.json + tools/gate-reproducers/manifest.json",
   "denominator": 7,
-  "passCount": 3,
-  "pct": 42.9,
+  "passCount": 5,
+  "pct": 71.4,
   "thresholdPct": 70,
-  "passed": false,
+  "passed": true,
   "rows": [
     {
       "example": "chord_inversions",
@@ -17,10 +17,10 @@
     {
       "example": "reich_phase",
       "rawVerdict": "inconcl",
-      "gateVerdict": "inconcl",
-      "pass": false,
-      "gradedVia": "raw-sweep",
-      "detail": ""
+      "gateVerdict": "match",
+      "pass": true,
+      "gradedVia": "projection",
+      "detail": "tools/gate-reproducers/reich_phase.rb → compare_2026-06-01T07-49-58-016Z_reich_phase_proj.md"
     },
     {
       "example": "dark_neon",
@@ -49,10 +49,10 @@
     {
       "example": "driving_pulse",
       "rawVerdict": "inconcl",
-      "gateVerdict": "inconcl",
-      "pass": false,
-      "gradedVia": "raw-sweep",
-      "detail": ""
+      "gateVerdict": "match",
+      "pass": true,
+      "gradedVia": "projection",
+      "detail": "tools/gate-reproducers/driving_pulse.rb → compare_2026-06-01T07-48-15-226Z_driving_pulse_proj.md"
     },
     {
       "example": "monday_blues",

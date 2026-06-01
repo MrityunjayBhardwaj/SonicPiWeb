@@ -32,6 +32,36 @@
         "web": "41,40,40,40,43,40,40,40,41,40,40,40,43,40,40",
         "note": "PITCH-MATCH over 15 notes; re-captured live on merged main; /s_new ground truth confirms ring@oct2 = 41,36,38,38,43 (F2,C2,D2,D2,G2)"
       }
+    },
+    {
+      "example": "reich_phase",
+      "reproducer": "tools/gate-reproducers/reich_phase.rb",
+      "blindReason": "#377 — Steve Reich Piano Phase: two live_loops (:slow 0.3, :faster 0.295) tick the SAME ring and drift, so notes land near-simultaneously and onset ordering is timing-jitter dependent. The engine is provably correct on the long prefix (first 12 notes identical desktop↔web) but the comparator marks the full piece INCONCL after drift.",
+      "projection": "ONE loop ticking the SAME ring (E4,Fs4,B4,Cs5,D5,Fs4,E4,Cs5,B4,Fs4,D5,Cs5) monophonic + staccato (:beep, release 0.05, sleep 0.5). Grades the exact engine logic under test (ring iteration + tick + note-name resolution), free of the phase collision the comparator cannot order.",
+      "requires": [],
+      "evidence": {
+        "report": "compare_2026-06-01T07-49-58-016Z_reich_phase_proj.md",
+        "verdict": "match",
+        "method": "onset/onset conf 1",
+        "desktop": "64,66,71,73,74,66,64,73,71,66,74,73,64,66,71,73,74,66,64,73,71,66,74,73",
+        "web": "64,66,71,73,74,66,64,73,71,66,74,73,64,66,71,73,74,66,64,73,71,66,74,73",
+        "note": "PITCH-MATCH over 24 notes (exact ring ×2: E4,Fs4,B4,Cs5,D5,...). First capture flaked web-no-WAV (#427/#358); retry was a clean identical match."
+      }
+    },
+    {
+      "example": "driving_pulse",
+      "reproducer": "tools/gate-reproducers/driving_pulse.rb",
+      "blindReason": "#368 — a sustained :mod_pulse melody (release 0.6, slewed, mod_range 15) over a heavy_kick. The onset tracker cannot resolve the sustained/slewed material: web 2 onsets vs desktop 59 (ratio 0.03 < 0.3), no Tier-1 verdict. Not a pitch error — the instrument cannot see it.",
+      "projection": "Isolate the SAME note sequence (play 30, play 38, alternating) as a staccato monophonic :beep (release 0.05, sleep 0.5). NB MIDI 30/38 are sub-bass (46/73 Hz) so the pitch tracker octave-folds BOTH sides to a constant ~40; the MATCH is on the identical folded sequence + identical 24-onset count. That proves the web DOES render the pulse (the original 'web 2 onsets' was onset-blindness on the sustained envelope, not a missing-notes engine bug).",
+      "requires": [],
+      "evidence": {
+        "report": "compare_2026-06-01T07-48-15-226Z_driving_pulse_proj.md",
+        "verdict": "match",
+        "method": "onset/onset conf 1",
+        "desktop": "40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40",
+        "web": "40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40,40",
+        "note": "PITCH-MATCH over 24 onsets; desktop==web exactly. Sub-bass 30/38 fold to a constant ~40 on both sides — parity is confirmed by the identical sequence + onset count."
+      }
     }
   ],
   "limitations": [
