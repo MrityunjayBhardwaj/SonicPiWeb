@@ -1,14 +1,14 @@
 {
   "generatedFrom": "examples-sweep.json + tools/gate-reproducers/manifest.json",
   "denominator": 7,
-  "passCount": 5,
-  "pct": 71.4,
+  "passCount": 3,
+  "pct": 42.9,
   "thresholdPct": 70,
-  "passed": true,
+  "passed": false,
   "rows": [
     {
       "example": "chord_inversions",
-      "rawVerdict": "match",
+      "rawVerdict": "inconcl",
       "gateVerdict": "match",
       "pass": true,
       "gradedVia": "projection",
@@ -16,9 +16,9 @@
     },
     {
       "example": "reich_phase",
-      "rawVerdict": "match",
-      "gateVerdict": "match",
-      "pass": true,
+      "rawVerdict": "inconcl",
+      "gateVerdict": "inconcl",
+      "pass": false,
       "gradedVia": "raw-sweep",
       "detail": ""
     },
@@ -32,7 +32,7 @@
     },
     {
       "example": "mod_303_phade",
-      "rawVerdict": "inconcl",
+      "rawVerdict": "match",
       "gateVerdict": "match",
       "pass": true,
       "gradedVia": "raw-refreshed",
@@ -48,15 +48,15 @@
     },
     {
       "example": "driving_pulse",
-      "rawVerdict": "match",
-      "gateVerdict": "match",
-      "pass": true,
+      "rawVerdict": "inconcl",
+      "gateVerdict": "inconcl",
+      "pass": false,
       "gradedVia": "raw-sweep",
       "detail": ""
     },
     {
       "example": "monday_blues",
-      "rawVerdict": "match",
+      "rawVerdict": "inconcl",
       "gateVerdict": "match",
       "pass": true,
       "gradedVia": "projection",
