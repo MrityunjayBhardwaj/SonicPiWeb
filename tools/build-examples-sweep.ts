@@ -75,7 +75,7 @@ interface SweepRow {
   category: string
   example: string
   path: string
-  verdict: 'match' | 'diverge' | 'prng-variant' | 'invalid' | 'inconcl' | 'error'
+  verdict: 'match' | 'diverge' | 'prng-variant' | 'invalid' | 'inconcl' | 'error' | 'engine-silent' | 'tool-fail'
   verdictRaw: string
   tempoDesktop: number | null
   tempoWeb: number | null
@@ -166,7 +166,13 @@ function parseReport(reportPath: string): Partial<SweepRow> {
       row.verdict = 'diverge'
       const m = row.verdictRaw.match(/at (note|pc) (\d+)/)
       if (m) row.divergeAt = `${m[1]} ${m[2]}`
-    } else if (/INVALID/.test(row.verdictRaw)) row.verdict = 'invalid'
+    }
+    // SV48 (#427): name the missing-WAV layer — ENGINE-SILENT (engine ran, no
+    // audio) and TOOL-FAIL (harness lost a real blob) are distinct from a
+    // precondition INVALID. Matched before INVALID.
+    else if (/^❌ ENGINE-SILENT\b/.test(row.verdictRaw)) row.verdict = 'engine-silent'
+    else if (/^❌ TOOL-FAIL\b/.test(row.verdictRaw)) row.verdict = 'tool-fail'
+    else if (/INVALID/.test(row.verdictRaw)) row.verdict = 'invalid'
     else if (/inconclusive/i.test(row.verdictRaw)) row.verdict = 'inconcl'
     else row.verdict = 'inconcl'
   }
@@ -385,6 +391,8 @@ const counts = {
   invalid: rows.filter(r => r.verdict === 'invalid').length,
   inconcl: rows.filter(r => r.verdict === 'inconcl').length,
   error: rows.filter(r => r.verdict === 'error').length,
+  engineSilent: rows.filter(r => r.verdict === 'engine-silent').length,
+  toolFail: rows.filter(r => r.verdict === 'tool-fail').length,
   prng: rows.filter(r => r.prng).length,
   prngFreeReal: rows.filter(r => r.prngFreeReal).length,
   heavy: rows.filter(r => r.heavy).length,

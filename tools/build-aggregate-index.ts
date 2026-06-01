@@ -45,7 +45,7 @@ const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g,
 // ── Manifest shapes (only the fields we read) ──────────────────────────────
 interface PitchManifest {
   generatedAt?: string
-  counts: { match: number; diverge: number; prngVariant: number; invalid: number; inconcl: number; error: number; prng: number; prngFreeReal: number; heavy: number; totalRows: number }
+  counts: { match: number; diverge: number; prngVariant: number; invalid: number; inconcl: number; error: number; engineSilent?: number; toolFail?: number; prng: number; prngFreeReal: number; heavy: number; totalRows: number }
 }
 interface ConsistencyManifest {
   generatedAt?: string
@@ -88,6 +88,9 @@ function pitchCard(title: string, count: number, viewer: string, m: PitchManifes
     chip('DIVERGE', c.diverge, 'fail'),
     chip('INCONCL', c.inconcl, 'incon'),
     chip('ERROR', c.error, 'faildark'),
+    // SV48 (#427): missing-WAV layers named distinctly from INVALID.
+    chip('ENGINE-SILENT', c.engineSilent ?? 0, 'faildark'),
+    chip('TOOL-FAIL', c.toolFail ?? 0, 'incon'),
     chip('INVALID', c.invalid, 'incon'),
   ].filter(Boolean).join('')
   const stamp = m.generatedAt ? new Date(m.generatedAt).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : ''
