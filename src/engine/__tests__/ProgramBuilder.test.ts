@@ -276,6 +276,22 @@ describe('ProgramBuilder', () => {
       expect((program[1] as any).body).toHaveLength(2)  // play, sleep
     })
 
+    it('#435: accepts a leading options hash (in_thread name: :x do … end)', () => {
+      const b = new ProgramBuilder()
+      // Transpiler emits `in_thread({name:"x"}, fn)` for `in_thread name: :x`.
+      // Without the opts-hash overload, the hash landed in the block slot and
+      // `buildFn(inner)` threw "buildFn is not a function" — killing the thread.
+      expect(() =>
+        b.in_thread({ name: 'x' }, (inner) => {
+          inner.play(60)
+        })
+      ).not.toThrow()
+      const program = b.build()
+      const threadStep = program[0] as any
+      expect(threadStep.tag).toBe('thread')
+      expect(threadStep.body[0].note).toBe(60)
+    })
+
     it('inherits currentSynth from parent', () => {
       const b = new ProgramBuilder()
       b.use_synth('prophet')

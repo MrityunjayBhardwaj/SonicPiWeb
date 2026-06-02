@@ -1013,8 +1013,18 @@ export class SonicPiEngine {
         topLevelBuilder.use_random_seed(seed)
       }
 
-      // Top-level in_thread: wrap callback in a one-shot live_loop
-      const topLevelInThread = (fn: (b: ProgramBuilder) => void) => {
+      // Top-level in_thread: wrap callback in a one-shot live_loop.
+      // `in_thread name: :x do … end` passes an options hash first; the
+      // transpiler emits `in_thread({name:"x"}, fn)`. Accept the optional
+      // leading hash so the block isn't mistaken for `fn` — without this the
+      // hash landed in `fn` and `fn(b)` threw "fn is not a function", silently
+      // killing every named top-level thread (#435). Mirrors topLevelAt's shape.
+      const topLevelInThread = (
+        optsOrFn: Record<string, unknown> | ((b: ProgramBuilder) => void),
+        maybeFn?: (b: ProgramBuilder) => void
+      ) => {
+        const fn = typeof optsOrFn === 'function' ? optsOrFn : maybeFn
+        if (typeof fn !== 'function') return
         const name = `__thread_${Date.now()}_${randomSuffix()}`
         fxAwareWrappedLiveLoop(name, (b: ProgramBuilder) => {
           fn(b)
