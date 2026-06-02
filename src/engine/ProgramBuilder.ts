@@ -410,7 +410,21 @@ export class ProgramBuilder {
     return this
   }
 
-  in_thread(buildFn: (b: ProgramBuilder) => void): this {
+  in_thread(buildFn: (b: ProgramBuilder) => void): this
+  in_thread(opts: Record<string, unknown>, buildFn: (b: ProgramBuilder) => void): this
+  in_thread(
+    optsOrFn: Record<string, unknown> | ((b: ProgramBuilder) => void),
+    maybeFn?: (b: ProgramBuilder) => void
+  ): this {
+    // `in_thread name: :x do … end` passes an options hash first (desktop SP
+    // supports name:/delay:/sync:/seed:). The transpiler faithfully emits
+    // `in_thread({name:"x"}, fn)`; without this overload the hash landed in the
+    // block slot and `buildFn(inner)` threw "buildFn is not a function" (#435).
+    // Mirror with_fx's optsOrFn/maybeFn resolution.
+    const buildFn = typeof optsOrFn === 'function' ? optsOrFn : maybeFn
+    if (typeof buildFn !== 'function') {
+      throw new Error('in_thread requires a block')
+    }
     // in_thread forks a thread → fresh tick scope + re-seeded rng, but
     // inherits a snapshot of thread-locals (synth/bpm/transpose/density/
     // defaults/iteration introspection). #343 Defect: _currentBpm now threads.
