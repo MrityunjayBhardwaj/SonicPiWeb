@@ -14,12 +14,17 @@ import sys, json, numpy as np, wave
 NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
 
-def load(path):
+def load(path, max_dur=None):
     w = wave.open(path, 'rb')
     sr, n, ch = w.getframerate(), w.getnframes(), w.getnchannels()
     a = np.frombuffer(w.readframes(n), dtype=np.int16).astype(np.float64)
     if ch == 2:
         a = a.reshape(-1, 2).mean(axis=1)
+    # #376 reconciliation — cap to a common duration so two captures of an
+    # evolving generative piece are compared over the SAME time span (a
+    # misaligned window otherwise confounds note-count / histogram parity).
+    if max_dur is not None:
+        a = a[:int(max_dur * sr)]
     a /= (np.abs(a).max() or 1.0)          # normalise away the 0.5× gain delta
     return a, sr
 
@@ -57,10 +62,10 @@ def estimate_note_dt(a, sr):
     return float(np.clip(np.median(iois), 0.05, 2.0))
 
 
-def track(path, note_dt=None):
+def track(path, note_dt=None, max_dur=None):
     """Onset-based pitch-track. note_dt auto-estimated from the signal when
     not given (#348 — removes the hardcoded-0.25s assumption)."""
-    a, sr = load(path)
+    a, sr = load(path, max_dur)
     if note_dt is None:
         note_dt = estimate_note_dt(a, sr)
     notes = []
@@ -101,11 +106,11 @@ def _ac_pitch(seg, sr):
     return sr / peak
 
 
-def contour(path):
+def contour(path, max_dur=None):
     """#348: pitch-contour fallback for sustained / slow-attack material that
     has no sharp onsets. Per-frame autocorrelation → median-filter → segment
     runs of stable MIDI into notes."""
-    a, sr = load(path)
+    a, sr = load(path, max_dur)
     fl, hop = int(sr * 0.046), int(sr * 0.01)
     midis = []
     for i in range(0, len(a) - fl, hop):
@@ -134,13 +139,21 @@ def contour(path):
     return notes, sr, len(a) / sr, conf
 
 
-def analyse(path, note_dt=None):
-    on, ndt, sr, dur = track(path, note_dt)
+def analyse(path, note_dt=None, force_method=None, max_dur=None):
+    on, ndt, sr, dur = track(path, note_dt, max_dur)
     method, conf = 'onset', 1.0
+    # #376 reconciliation: when the comparator forces a common method on both
+    # sides (because each auto-selected a different one), bypass auto-selection.
+    if force_method == 'onset':
+        pass  # keep the onset track as-is
+    elif force_method == 'contour':
+        cn, _, _, ccon = contour(path, max_dur)
+        on, conf = cn, ccon
+        method = 'contour' if ccon >= 0.6 else 'contour-low'
     # Expected note count is unknown; fall back to contour when onset yields
     # implausibly few notes for the signal length (sustained/legato material).
-    if len(on) < max(2, dur / (ndt * 8)):
-        cn, _, _, ccon = contour(path)
+    elif len(on) < max(2, dur / (ndt * 8)):
+        cn, _, _, ccon = contour(path, max_dur)
         if len(cn) > len(on):
             on, conf = cn, ccon
             method = 'contour' if ccon >= 0.6 else 'contour-low'
@@ -170,14 +183,19 @@ if __name__ == '__main__':
 
     def opt(flag):
         return float(args[args.index(flag) + 1]) if flag in args else None
+    def opt_str(flag):
+        return args[args.index(flag) + 1] if flag in args else None
     note_dt = opt('--note-dt')
     bpm = opt('--bpm')
     if note_dt is None and bpm:                 # one beat = the default grid
         note_dt = 60.0 / bpm
+    force_method = opt_str('--force-method')    # #376 — 'onset' | 'contour'
+    max_dur = opt('--max-dur')                  # #376 — cap to common span (s)
+    VALUE_FLAGS = ('--note-dt', '--bpm', '--force-method', '--max-dur')
     pos = [x for i, x in enumerate(args)
            if not x.startswith('--')
-           and (i == 0 or args[i - 1] not in ('--note-dt', '--bpm'))]
-    r = analyse(pos[0], note_dt)
+           and (i == 0 or args[i - 1] not in VALUE_FLAGS)]
+    r = analyse(pos[0], note_dt, force_method, max_dur)
     if as_json:
         print(json.dumps(r))
     else:

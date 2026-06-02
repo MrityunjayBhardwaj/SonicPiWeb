@@ -180,6 +180,12 @@ interface ComparisonResult {
   spectrogram: SpectrogramMetrics | null
   spectrogramError: string | null
   reportPath: string
+  // #376 reconciliation — when the two sides auto-select DIFFERENT pitch-track
+  // methods, both are re-tracked with a forced common method (contour) capped
+  // to the shorter capture's duration, so a method-asymmetric pair can still
+  // yield a Tier-1 verdict (MATCH / PRNG-VARIANT) instead of an automatic
+  // INCONCL. Populated only in the asymmetric case; null otherwise.
+  reconciledPitch?: { desktop: PitchTrack | null; web: PitchTrack | null } | null
 }
 
 function writeComparisonReport(r: ComparisonResult): void {
@@ -446,7 +452,38 @@ function writeComparisonReport(r: ComparisonResult): void {
     else if (mismatch < 0) pitchVerdict = `✓ PITCH-MATCH — ${unit} identical over ${n}`
     else if (onsetUnreliable) pitchVerdict = `⚠ INCONCLUSIVE — onset detector unreliable: gross density mismatch (desktop ${dp.count} vs web ${wp.count} onsets, ratio ${countRatio.toFixed(2)} < 0.3) on slewed/sustained material; onset method cannot judge this — no Tier-1 verdict (#368)`
     else if (polyphonicUnreliable) pitchVerdict = `⚠ INCONCLUSIVE — polyphonic material (play_chord) judged via contour pitch-tracker; ordering reported on both sides contains pitch-classes outside any single chord (overtone/chord-member picking) — contour method cannot judge polyphonic-chord arpeggios reliably — no Tier-1 verdict (#374; for engine verification use an instrument-friendly monophonic reproducer)`
-    else if (methodAsymmetric) pitchVerdict = `⚠ INCONCLUSIVE — pitch-tracker method asymmetry: desktop \`${dp.method}\` (conf ${dp.confidence}) vs web \`${wp.method}\` (conf ${wp.confidence}); different envelope characteristics route each side to a different tracker (often gain-staging or FX accumulation makes a different signal dominate each side) — sequences from different methods are not comparable, no Tier-1 verdict (#376; for engine verification use an instrument-friendly reproducer with symmetric envelopes)`
+    else if (methodAsymmetric) {
+      // #376 — instead of an automatic INCONCL, try to RECONCILE: both sides
+      // were re-tracked with a forced common method (contour) capped to the
+      // shorter capture's duration (r.reconciledPitch). Compared over the same
+      // method + same time span, a method-asymmetric pair can still yield a
+      // verdict — but ONLY a PRNG-VARIANT, and ONLY when the source is PRNG-
+      // driven AND the pitch-class histogram genuinely matches. Everything
+      // else stays INCONCL, so a pair where DIFFERENT signals dominate each
+      // side (the dark_neon case — no PRNG token, blade vs kick) is never
+      // misread as MATCH or as an engine bug. The reconciled "tempo" is
+      // contour-segmentation spacing (not musical), so it is NOT a gate here;
+      // the pc-histogram cosine carries the verdict (#358/#364/#367).
+      const rd = r.reconciledPitch?.desktop, rw = r.reconciledPitch?.web
+      const rdSeq = rd ? (rd.pc.filter(x => x !== null) as number[]) : []
+      const rwSeq = rw ? (rw.pc.filter(x => x !== null) as number[]) : []
+      const rn = Math.min(rdSeq.length, rwSeq.length)
+      const rCos = rn > 0 ? cosine(pcHist(rdSeq.slice(0, rn)), pcHist(rwSeq.slice(0, rn))) : 0
+      const rCount = rd && rw && Math.max(rd.count, rw.count) > 0
+        ? Math.min(rd.count, rw.count) / Math.max(rd.count, rw.count) : 0
+      const rLowConf = !rd || !rw || rd.confidence < 0.6 || rw.confidence < 0.6
+      const alignedDur = Math.min(r.desktop.stats?.duration ?? 0, r.web.stats?.duration ?? 0)
+      if (rd && rw && !rLowConf && rn > 0 && PRNG_RE.test(r.code) && rCos >= 0.92 && rCount >= 0.5) {
+        prngVariant = true; prngCos = rCos
+        pitchVerdict = `≈ pitch-class histogram cos=${rCos.toFixed(3)} (≥0.92), density ratio ${rCount.toFixed(2)} (≥0.5), PRNG token; same composition, different random walk — method-reconciled (desktop \`${dp.method}\`→contour · web \`${wp.method}\`→contour over aligned ${alignedDur.toFixed(1)}s window; #376/#358/#364/#367)`
+      } else {
+        const why = !PRNG_RE.test(r.code) ? '; no PRNG token — not promoted (different signals dominate each side)'
+          : rLowConf ? `; reconciled-contour low confidence (desktop ${rd?.confidence ?? '—'} · web ${rw?.confidence ?? '—'})`
+          : rn === 0 ? '; reconciled track empty'
+          : `; reconciled-contour histogram cos=${rCos.toFixed(3)} < 0.92 (different signals dominate each side)`
+        pitchVerdict = `⚠ INCONCLUSIVE — pitch-tracker method asymmetry: desktop \`${dp.method}\` (conf ${dp.confidence}) vs web \`${wp.method}\` (conf ${wp.confidence})${why} — no Tier-1 verdict (#376)`
+      }
+    }
     else if (multiLoopPhaseDrift) pitchVerdict = `⚠ INCONCLUSIVE — multi-loop interleaved phase drift: ${liveLoopCount} live_loops, first ${prefixLen} notes matched exactly desktop ↔ web before drift began. When two near-simultaneous onsets fall within onset-detector resolution (~5-10ms), which side "wins" is timing-jitter dependent, not engine semantics — engine provably correct on the long prefix-match (#377; for engine verification use an instrument-friendly single-loop variant)`
     else if (prngVariant) {
       pitchVerdict = `≈ pitch-class histogram cos=${prngCos.toFixed(3)} (≥0.92), tempo match, density ratio ${countRatio.toFixed(2)} (≥0.5), PRNG token in source; same composition, different random walk (cross-engine seed parity is not a v1 goal — #358/#364/#367)`
@@ -738,11 +775,16 @@ async function main(): Promise<void> {
 
   // Tier 1 — pitch-track (the musical-correctness verdict). Run for each WAV
   // independently so a missing one still yields the other's sequence.
-  const runPitch = async (wav: string | null): Promise<PitchTrack | null> => {
+  const runPitch = async (
+    wav: string | null,
+    opts?: { forceMethod?: 'onset' | 'contour'; maxDur?: number }
+  ): Promise<PitchTrack | null> => {
     if (!wav) return null
     try {
       const pArgs = ['tools/pitchtrack.py', '--json']
       if (args.bpm !== null) pArgs.push('--bpm', String(args.bpm))
+      if (opts?.forceMethod) pArgs.push('--force-method', opts.forceMethod)
+      if (opts?.maxDur !== undefined) pArgs.push('--max-dur', opts.maxDur.toFixed(3))
       pArgs.push(wav)
       const py = await runChild('python3', pArgs)
       if (py.exitCode !== 0) return null
@@ -757,6 +799,22 @@ async function main(): Promise<void> {
   }
   const [desktopPitch, webPitch] = await Promise.all([runPitch(desktopWav), runPitch(webWav)])
 
+  // #376 reconciliation — if the two sides auto-selected DIFFERENT methods,
+  // re-track both with a forced common method (contour) capped to the shorter
+  // capture's duration. Compared over the same time span + same method, a
+  // method-asymmetric pair can still yield a real Tier-1 verdict.
+  let reconciledPitch: { desktop: PitchTrack | null; web: PitchTrack | null } | null = null
+  if (desktopPitch && webPitch && desktopPitch.method !== webPitch.method) {
+    const dDur = desktopStats?.duration ?? 0
+    const wDur = webStats?.duration ?? 0
+    const capDur = dDur > 0 && wDur > 0 ? Math.min(dDur, wDur) : undefined
+    const [dRec, wRec] = await Promise.all([
+      runPitch(desktopWav, { forceMethod: 'contour', maxDur: capDur }),
+      runPitch(webWav, { forceMethod: 'contour', maxDur: capDur }),
+    ])
+    reconciledPitch = { desktop: dRec, web: wRec }
+  }
+
   const result: ComparisonResult = {
     timestamp: new Date().toISOString(),
     code: args.code,
@@ -767,6 +825,7 @@ async function main(): Promise<void> {
     spectrogram,
     spectrogramError,
     reportPath,
+    reconciledPitch,
   }
   writeComparisonReport(result)
 
