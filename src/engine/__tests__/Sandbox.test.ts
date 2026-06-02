@@ -254,4 +254,17 @@ describe('Sandbox', () => {
     )
     expect(result).toBe(24) // 48 - 24, NOT NaN
   })
+
+  // #441 — Ruby String * Integer is repeat ("0" * 5 == "00000"). Before the
+  // fix __spMul fell through to `a * b` === NaN, which broke iterating helpers
+  // like `shuffle("0" * n)` ("arr is not iterable").
+  it('String * Integer repeats the string (both operand orders)', async () => {
+    let result: unknown = null
+    const execute = createSandboxedExecutor(
+      'storeResult([__spMul("0", 5), __spMul(3, "ab"), __spMul("x", 0)])',
+      ['storeResult']
+    )
+    await execute((v: unknown) => { result = v })
+    expect(result).toEqual(['00000', 'ababab', ''])
+  })
 })

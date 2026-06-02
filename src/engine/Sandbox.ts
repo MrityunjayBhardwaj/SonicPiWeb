@@ -189,6 +189,13 @@ export function createIsolatedExecutor(
     // Needed for patterns like `hats = [1,0,1,0] * 4`.
     '  if (Array.isArray(a) && typeof b === "number") return new Array(b).fill(a).flat();',
     '  if (typeof a === "number" && Array.isArray(b)) return new Array(a).fill(b).flat();',
+    // Ruby String * Integer → repeat the string (e.g. `"0" * 5 == "00000"`).
+    // Without this, string*number fell through to `a * b` === NaN, which then
+    // broke iterating helpers like `shuffle("0" * n)` ("arr is not iterable",
+    // #441). Clamp to a non-negative integer so a stray negative/float can't
+    // crash a live loop (Ruby would raise; silent-safe is better mid-loop).
+    '  if (typeof a === "string" && typeof b === "number") return a.repeat(Math.max(0, Math.floor(b)));',
+    '  if (typeof a === "number" && typeof b === "string") return b.repeat(Math.max(0, Math.floor(a)));',
     '  return a * b;',
     '}',
     // Ruby x.kind_of?(Class) / x.is_a?(Class) — dispatch by class name.
